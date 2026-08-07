@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      just_audio plays in-memory audio bytes (like our AI's voice
+      response) by briefly serving them from a local loopback server
+      (127.0.0.1) to Android's ExoPlayer. Modern Android blocks all
+      plain HTTP traffic by default — even to itself — unless
+      explicitly allowed here. This does NOT weaken security for real
+      network traffic; it only permits the device to talk to itself.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>
