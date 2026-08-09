@@ -843,6 +843,13 @@ class AppStrings {
   String get faqCancelOrderAnswer => _isHindi
       ? 'अभी ऑर्डर रद्द करने की सुविधा ऐप में उपलब्ध नहीं है, कृपया विक्रेता से संपर्क करें।'
       : 'Cancelling an order isn\'t available in the app yet — please contact the seller directly.';
+  String get liveCallAiSpeakingLabel => _isHindi ? 'बोल रहे हैं...' : 'Speaking...';
+
+  String get liveCallMuteButton => _isHindi ? 'माइक बंद करें' : 'Mute';
+
+  String get liveCallUnmuteButton => _isHindi ? 'माइक चालू करें' : 'Unmute';
+
+  String get liveCallPlacingOrderLabel => _isHindi ? 'ऑर्डर दिया जा रहा है...' : 'Placing your order...';
 
   String get faqAppNameAnswer => _isHindi
       ? 'यह गांवहाट है — अपने गांव के आसपास की दुकानों से सीधे सामान मंगाने का ऐप।'
