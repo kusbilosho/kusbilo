@@ -703,7 +703,7 @@ class _SearchBar extends StatelessWidget {
           // Voice ordering entry point — placed right in the search bar
           // since typing is the exact barrier this is meant to remove.
           GestureDetector(
-            onTap: () => showVoiceOrderSheet(context),
+            onTap: () => showLiveCallSheet(context),
             child: Container(
               padding: const EdgeInsets.all(6),
               decoration: const BoxDecoration(color: AppColors.sage, shape: BoxShape.circle),
