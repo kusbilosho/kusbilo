@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:record/record.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -39,10 +39,9 @@ class LiveConfirmOrderCall {
 /// the AI is talking, etc.
 enum LiveCallPhase { connecting, listening, aiSpeaking, ended, error }
 
-/// Thrown when Firestore has no usable Gemini API key configured yet
-/// (e.g. `config/geminiLiveApi.apiKey` is missing or empty) — lets the
-/// screen show a clear "not set up" message instead of a raw socket
-/// error.
+/// Thrown when no Gemini API key has been saved on this device yet
+/// (see [LiveVoiceService.saveApiKey]) — lets the screen show a clear
+/// "not set up" message instead of a raw socket error.
 class NoApiKeyConfiguredException implements Exception {
   @override
   String toString() => 'No Gemini API key is configured.';
@@ -57,14 +56,12 @@ class NoApiKeyConfiguredException implements Exception {
 /// one open connection — this is what actually makes it feel like a
 /// phone call.
 ///
-/// Deliberately NOT Firebase AI Logic: that requires the Firebase
-/// project to be on the paid Blaze plan just to open a Live session.
-/// This talks to `generativelanguage.googleapis.com` directly with a
-/// plain Gemini API key — the same free-tier-friendly key DevMate AI
-/// uses — except the key itself lives in a Firestore document
-/// (`config/geminiLiveApi`, field `apiKey`) instead of being hardcoded
-/// in the app. That's what lets the web admin panel swap the key the
-/// moment one runs out of quota, with zero app update needed.
+/// The Gemini API key lives only on this device, in encrypted local
+/// storage (flutter_secure_storage) — not in Firestore, not on any
+/// server. Enter it once from the Live Call screen (see
+/// [LiveVoiceService.saveApiKey]); nothing about the key ever leaves
+/// the phone except the direct HTTPS/WebSocket request to Google's own
+/// Gemini API.
 ///
 /// Ordering works via two tools the model can call whenever the buyer
 /// names something or is ready to check out:
@@ -73,7 +70,9 @@ class NoApiKeyConfiguredException implements Exception {
 ///    the same location-detect + placeOrder flow the old checkout used,
 ///    then report back success/failure with [respondToConfirmOrder].
 class LiveVoiceService {
-  static const _model = 'gemini-3.1-flash-live-preview';
+  static const _model = 'gemini-2.0-flash-live-001';
+  static const _kApiKeyStorageKey = 'gemini_live_api_key';
+  static final _secureStorage = const FlutterSecureStorage();
 
   WebSocketChannel? _channel;
   StreamSubscription? _wsSub;
@@ -127,8 +126,9 @@ class LiveVoiceService {
   /// language the model should actually speak, matching whatever the
   /// buyer has the app set to.
   ///
-  /// Throws [NoApiKeyConfiguredException] if nobody has set an API key
-  /// in the admin panel yet.
+  /// Throws [NoApiKeyConfiguredException] if no key has been saved on
+  /// this device yet — call [saveApiKey] first (or catch this and
+  /// prompt for one).
   Future<void> start(
     List<Product> products,
     AppStrings strings, {
@@ -137,7 +137,7 @@ class LiveVoiceService {
     _manualDisconnect = false;
     _phaseController.add(LiveCallPhase.connecting);
 
-    final apiKey = await _fetchApiKey();
+    final apiKey = await getApiKey();
     if (apiKey == null || apiKey.trim().isEmpty) {
       _phaseController.add(LiveCallPhase.error);
       throw NoApiKeyConfiguredException();
@@ -158,18 +158,18 @@ class LiveVoiceService {
     await _connect(apiKey: apiKey, systemPrompt: systemPrompt);
   }
 
-  /// Reads the currently active Gemini Live API key from Firestore.
-  /// Kept as a separate, un-cached call (not read once and reused) so
-  /// every new call always picks up whatever the admin panel has set
-  /// most recently, without needing an app restart.
-  Future<String?> _fetchApiKey() async {
-    try {
-      final doc = await FirebaseFirestore.instance.collection('config').doc('geminiLiveApi').get();
-      return doc.data()?['apiKey'] as String?;
-    } catch (_) {
-      return null;
-    }
-  }
+  /// Reads the Gemini API key from this device's encrypted local
+  /// storage. Returns null if none has been saved yet.
+  static Future<String?> getApiKey() => _secureStorage.read(key: _kApiKeyStorageKey);
+
+  /// Saves the buyer's own Gemini API key locally on this device
+  /// (encrypted, via flutter_secure_storage). Call this once from a
+  /// settings/setup screen — get a free key at
+  /// https://aistudio.google.com/apikey.
+  static Future<void> saveApiKey(String key) => _secureStorage.write(key: _kApiKeyStorageKey, value: key.trim());
+
+  /// Removes the saved key from this device.
+  static Future<void> clearApiKey() => _secureStorage.delete(key: _kApiKeyStorageKey);
 
   String _buildSystemPrompt(List<Product> products, AppStrings strings, {required bool isHindi}) {
     final catalogLines = products
