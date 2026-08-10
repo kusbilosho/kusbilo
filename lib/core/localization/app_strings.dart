@@ -797,6 +797,30 @@ class AppStrings {
   String liveCallItemAdded(String itemName, int qty) =>
       _isHindi ? '$itemName × $qty कार्ट में जुड़ गया' : '$itemName × $qty added to cart';
 
+  String get liveCallAiSpeakingLabel => _isHindi ? 'बोल रहे हैं...' : 'Speaking...';
+
+  String get liveCallMuteButton => _isHindi ? 'माइक बंद करें' : 'Mute';
+
+  String get liveCallUnmuteButton => _isHindi ? 'माइक चालू करें' : 'Unmute';
+
+  String get liveCallPlacingOrderLabel => _isHindi ? 'ऑर्डर दिया जा रहा है...' : 'Placing your order...';
+
+  String get liveCallNoApiKeyError => _isHindi
+      ? 'वॉइस कॉल के लिए पहले अपनी Gemini API key डालें।'
+      : 'Add your Gemini API key first to use voice calls.';
+
+  String get liveCallSetupTitle => _isHindi ? 'वॉइस कॉल शुरू करें' : 'Set up voice calls';
+
+  String get liveCallSetupBody => _isHindi
+      ? 'एक बार अपनी मुफ़्त Gemini API key डालें — यह सिर्फ़ इसी फ़ोन पर सुरक्षित रहती है, कहीं और नहीं भेजी जाती।'
+      : 'Enter your free Gemini API key once — it stays only on this phone, never sent anywhere else.';
+
+  String get liveCallApiKeyHint => _isHindi ? 'अपनी Gemini API key यहाँ डालें' : 'Paste your Gemini API key here';
+
+  String get liveCallGetKeyLink => _isHindi ? 'मुफ़्त key यहाँ से लें: aistudio.google.com/apikey' : 'Get a free key at aistudio.google.com/apikey';
+
+  String get liveCallSaveKeyButton => _isHindi ? 'सेव करके शुरू करें' : 'Save and start';
+
   // ---- Turn-based voice ordering (listen -> think -> speak loop) ----
 
   String get voiceListeningLabel => _isHindi ? 'सुन रहे हैं... बोलिए' : 'Listening... go ahead';
@@ -843,13 +867,6 @@ class AppStrings {
   String get faqCancelOrderAnswer => _isHindi
       ? 'अभी ऑर्डर रद्द करने की सुविधा ऐप में उपलब्ध नहीं है, कृपया विक्रेता से संपर्क करें।'
       : 'Cancelling an order isn\'t available in the app yet — please contact the seller directly.';
-  String get liveCallAiSpeakingLabel => _isHindi ? 'बोल रहे हैं...' : 'Speaking...';
-
-  String get liveCallMuteButton => _isHindi ? 'माइक बंद करें' : 'Mute';
-
-  String get liveCallUnmuteButton => _isHindi ? 'माइक चालू करें' : 'Unmute';
-
-  String get liveCallPlacingOrderLabel => _isHindi ? 'ऑर्डर दिया जा रहा है...' : 'Placing your order...';
 
   String get faqAppNameAnswer => _isHindi
       ? 'यह गांवहाट है — अपने गांव के आसपास की दुकानों से सीधे सामान मंगाने का ऐप।'
