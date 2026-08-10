@@ -71,7 +71,11 @@ class NoApiKeyConfiguredException implements Exception {
 ///    the same location-detect + placeOrder flow the old checkout used,
 ///    then report back success/failure with [respondToConfirmOrder].
 class LiveVoiceService {
-  static const _model = 'gemini-2.0-flash-live-001';
+  // Gemini 2.0 Flash Live (gemini-2.0-flash-live-001) was retired by
+  // Google in March 2026 — using it now gets an immediate WebSocket
+  // close 1008 ("model not found / not supported"). This is the
+  // current Live API model as of Aug 2026 per Google's own docs.
+  static const _model = 'gemini-2.5-flash-native-audio-preview-12-2025';
   static const _kApiKeyStorageKey = 'gemini_live_api_key';
   static final _secureStorage = const FlutterSecureStorage();
 
@@ -339,6 +343,7 @@ For anything about the app, an order, or a product, answer naturally and helpful
 
   void _handleSocketClosed() {
     final code = _channel?.closeCode;
+    final reason = _channel?.closeReason;
     _micSub?.cancel();
     _micSub = null;
     _recorder.stop().catchError((_) => null);
@@ -358,7 +363,8 @@ For anything about the app, an order, or a product, answer naturally and helpful
     }
 
     if (!_manualDisconnect) {
-      onError?.call(unexpected ? 'Call dropped (code: $code)' : 'Call ended');
+      final reasonText = (reason != null && reason.isNotEmpty) ? ': $reason' : '';
+      onError?.call(unexpected ? 'Call dropped (code: $code)$reasonText' : 'Call ended');
     }
     _phaseController.add(LiveCallPhase.ended);
   }
