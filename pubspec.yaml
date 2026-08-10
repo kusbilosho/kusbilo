@@ -14,15 +14,13 @@ dependencies:
   provider: ^6.1.2
   firebase_core: ^4.12.1
   firebase_auth: ^6.5.6
-  firebase_app_check: ^0.4.5
   cloud_firestore: ^6.7.1
   flutter_map: ^7.0.0
   latlong2: ^0.9.1
   speech_to_text: ^7.0.0
   flutter_tts: ^4.2.0
   just_audio: ^0.9.42
-  audio_session: ^0.1.21
-  web_socket_channel: ^3.0.1
+  audio_session: ^0.1.21    
 
   # Cloud Functions — needed for the admin KYC approve/reject calls and
   # order placement/assignment.
@@ -39,22 +37,15 @@ dependencies:
   url_launcher: ^6.3.1
   package_info_plus: ^8.1.1
 
-  # Real-time voice conversation — Gemini Live API via Firebase AI
-  # Logic. This replaces the old record→transcribe→ask→synthesize→play
-  # pipeline with one continuous streaming connection: much lower
-  # latency, natural pauses, and the buyer can interrupt mid-reply,
-  # like an actual phone call. Live API understands and speaks audio
-  # natively, so there's no separate speech-to-text or text-to-speech
-  # package needed anymore.
-  #
-  # NOTE (upgraded): bumped to the versions that match live_voice_service.dart's
-  # current API usage (modelTurn/functionCalls/InlineDataPart.data on
-  # LiveServerResponse, SoundHandle-based stop() on flutter_soloud, and the
-  # record_platform_interface method signatures record_linux 0.7.2 didn't
-  # implement).
-  firebase_ai: ^3.14.1
+  # Real-time voice conversation — Gemini Live API over a direct
+  # WebSocket (same protocol DevMate AI uses). The buyer's own Gemini
+  # API key is entered once inside the Live Call sheet and stored only
+  # on-device (flutter_secure_storage, encrypted) — no Firestore, no
+  # admin panel, nothing server-side.
+  web_socket_channel: ^3.0.1
   record: ^6.2.1
   flutter_soloud: ^3.5.4
+  flutter_secure_storage: ^9.2.2
 
   # Location auto-detect — geolocator reads GPS (free, OS-level),
   # geocoding turns coordinates into a village/district address using
