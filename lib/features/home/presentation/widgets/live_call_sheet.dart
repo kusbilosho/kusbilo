@@ -109,6 +109,7 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
       _savingKey = false;
       _needsApiKey = false;
       _errorText = null;
+      _phase = LiveCallPhase.connecting;
     });
     _startSession();
   }
@@ -367,6 +368,15 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
           ],
         );
       case LiveCallPhase.ended:
+        if (_errorText != null) {
+          return Column(
+            children: [
+              const Icon(Icons.error_outline, color: Color(0xFFC0453B), size: 44),
+              const SizedBox(height: 12),
+              Text(_errorText!, textAlign: TextAlign.center, style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w600)),
+            ],
+          );
+        }
         return const SizedBox(height: 84);
     }
   }
