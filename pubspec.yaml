@@ -21,7 +21,8 @@ dependencies:
   speech_to_text: ^7.0.0
   flutter_tts: ^4.2.0
   just_audio: ^0.9.42
-  audio_session: ^0.1.21    
+  audio_session: ^0.1.21
+  web_socket_channel: ^3.0.1
 
   # Cloud Functions — needed for the admin KYC approve/reject calls and
   # order placement/assignment.
