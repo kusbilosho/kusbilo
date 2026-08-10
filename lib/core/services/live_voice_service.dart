@@ -71,11 +71,11 @@ class NoApiKeyConfiguredException implements Exception {
 ///    the same location-detect + placeOrder flow the old checkout used,
 ///    then report back success/failure with [respondToConfirmOrder].
 class LiveVoiceService {
-  // Gemini 2.0 Flash Live (gemini-2.0-flash-live-001) was retired by
-  // Google in March 2026 — using it now gets an immediate WebSocket
-  // close 1008 ("model not found / not supported"). This is the
-  // current Live API model as of Aug 2026 per Google's own docs.
-  static const _model = 'gemini-2.5-flash-native-audio-preview-12-2025';
+  // gemini-2.5-flash-native-audio-preview-12-2025 connects fine (setup
+  // succeeds) but doesn't reliably send audio replies back. DevMate AI
+  // uses this model and it's confirmed working end-to-end for live
+  // voice replies, so matching it here.
+  static const _model = 'gemini-3.1-flash-live-preview';
   static const _kApiKeyStorageKey = 'gemini_live_api_key';
   static final _secureStorage = const FlutterSecureStorage();
 
