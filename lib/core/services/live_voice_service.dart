@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:record/record.dart';
@@ -73,6 +74,15 @@ class LiveVoiceService {
   static const _model = 'gemini-2.0-flash-live-001';
   static const _kApiKeyStorageKey = 'gemini_live_api_key';
   static final _secureStorage = const FlutterSecureStorage();
+
+  // Shared key the admin can set/rotate from the admin panel (e.g. when
+  // the free-tier quota runs out) — lives at settings/geminiConfig in
+  // Firestore. Every buyer reads this by default; a buyer's own
+  // locally-saved key (see saveApiKey) is only used as a fallback if
+  // this doc has no key set, so nothing changes for anyone who already
+  // entered their own key.
+  static const _kSettingsCollection = 'settings';
+  static const _kGeminiConfigDoc = 'geminiConfig';
 
   WebSocketChannel? _channel;
   StreamSubscription? _wsSub;
@@ -158,12 +168,32 @@ class LiveVoiceService {
     await _connect(apiKey: apiKey, systemPrompt: systemPrompt);
   }
 
-  /// Reads the Gemini API key from this device's encrypted local
-  /// storage. Returns null if none has been saved yet.
-  static Future<String?> getApiKey() => _secureStorage.read(key: _kApiKeyStorageKey);
+  /// Resolves the Gemini API key to use for this call: tries the
+  /// shared admin-set key in Firestore first (so rotating a key that
+  /// hit its quota takes effect for everyone immediately, no app
+  /// update needed), then falls back to whatever the buyer saved
+  /// locally on this device. Returns null if neither is set.
+  static Future<String?> getApiKey() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection(_kSettingsCollection)
+          .doc(_kGeminiConfigDoc)
+          .get();
+      final remoteKey = doc.data()?['apiKey'] as String?;
+      if (remoteKey != null && remoteKey.trim().isNotEmpty) {
+        return remoteKey.trim();
+      }
+    } catch (_) {
+      // Firestore unreachable, doc/rule missing, etc. — fall through
+      // to the buyer's own locally-saved key instead of failing the
+      // call outright.
+    }
+    return _secureStorage.read(key: _kApiKeyStorageKey);
+  }
 
   /// Saves the buyer's own Gemini API key locally on this device
-  /// (encrypted, via flutter_secure_storage). Call this once from a
+  /// (encrypted, via flutter_secure_storage), used only when no shared
+  /// admin key is set in Firestore. Call this once from a
   /// settings/setup screen — get a free key at
   /// https://aistudio.google.com/apikey.
   static Future<void> saveApiKey(String key) => _secureStorage.write(key: _kApiKeyStorageKey, value: key.trim());
