@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
-import 'package:firebase_ai/firebase_ai.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:record/record.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../localization/app_strings.dart';
 import '../../features/home/data/models/product.dart';
 
@@ -37,18 +39,32 @@ class LiveConfirmOrderCall {
 /// the AI is talking, etc.
 enum LiveCallPhase { connecting, listening, aiSpeaking, ended, error }
 
-/// Wraps a single Gemini Live API voice session — one continuous,
-/// interruptible, streaming conversation instead of a record → send →
-/// wait → play cycle. The model listens continuously (it decides when
-/// the buyer has finished a thought, not a fixed pauseFor timer), can
-/// be talked over mid-reply, and speaks back with almost no perceptible
-/// delay, because audio flows both directions on one open connection —
-/// this is what actually makes it feel like a phone call.
+/// Thrown when Firestore has no usable Gemini API key configured yet
+/// (e.g. `config/geminiLiveApi.apiKey` is missing or empty) — lets the
+/// screen show a clear "not set up" message instead of a raw socket
+/// error.
+class NoApiKeyConfiguredException implements Exception {
+  @override
+  String toString() => 'No Gemini API key is configured.';
+}
+
+/// Wraps a single Gemini Live API voice session over a direct
+/// WebSocket connection — one continuous, interruptible, streaming
+/// conversation instead of a record → send → wait → play cycle. The
+/// model listens continuously (it decides when the buyer has finished
+/// a thought), can be talked over mid-reply, and speaks back with
+/// almost no perceptible delay, because audio flows both directions on
+/// one open connection — this is what actually makes it feel like a
+/// phone call.
 ///
-/// This goes through Firebase AI Logic (FirebaseAI.googleAI()), not a
-/// raw WebSocket with an API key baked into the app — Firebase's own
-/// backend holds the Gemini credentials, so nothing secret ever ships
-/// inside the APK/IPA.
+/// Deliberately NOT Firebase AI Logic: that requires the Firebase
+/// project to be on the paid Blaze plan just to open a Live session.
+/// This talks to `generativelanguage.googleapis.com` directly with a
+/// plain Gemini API key — the same free-tier-friendly key DevMate AI
+/// uses — except the key itself lives in a Firestore document
+/// (`config/geminiLiveApi`, field `apiKey`) instead of being hardcoded
+/// in the app. That's what lets the web admin panel swap the key the
+/// moment one runs out of quota, with zero app update needed.
 ///
 /// Ordering works via two tools the model can call whenever the buyer
 /// names something or is ready to check out:
@@ -57,14 +73,24 @@ enum LiveCallPhase { connecting, listening, aiSpeaking, ended, error }
 ///    the same location-detect + placeOrder flow the old checkout used,
 ///    then report back success/failure with [respondToConfirmOrder].
 class LiveVoiceService {
-  LiveSession? _session;
+  static const _model = 'gemini-2.0-flash-live-001';
+
+  WebSocketChannel? _channel;
+  StreamSubscription? _wsSub;
   final AudioRecorder _recorder = AudioRecorder();
   final SoLoud _player = SoLoud.instance;
   StreamSubscription<Uint8List>? _micSub;
-  StreamSubscription? _receiveSub;
   AudioSource? _playbackSource;
   SoundHandle? _playbackHandle;
   bool _playerReady = false;
+  bool _setupComplete = false;
+  bool _manualDisconnect = false;
+  int _reconnectAttempts = 0;
+  static const _maxReconnectAttempts = 2;
+
+  // Remembered so a silent reconnect can rebuild the exact same session.
+  String? _lastApiKey;
+  String? _lastSystemPrompt;
 
   /// Called whenever the model asks to add something to the cart.
   void Function(LiveOrderCall call)? onOrderCall;
@@ -92,7 +118,7 @@ class LiveVoiceService {
     _muteController.add(_isMuted);
   }
 
-  bool get isActive => _session != null;
+  bool get isActive => _channel != null;
 
   /// Starts a live conversation. [products] should be the buyer's
   /// current catalog (from CatalogProvider) so the model knows exactly
@@ -100,18 +126,52 @@ class LiveVoiceService {
   /// session starts, never hardcoded. [strings]/[isHindi] pick the
   /// language the model should actually speak, matching whatever the
   /// buyer has the app set to.
+  ///
+  /// Throws [NoApiKeyConfiguredException] if nobody has set an API key
+  /// in the admin panel yet.
   Future<void> start(
     List<Product> products,
     AppStrings strings, {
     required bool isHindi,
   }) async {
+    _manualDisconnect = false;
     _phaseController.add(LiveCallPhase.connecting);
+
+    final apiKey = await _fetchApiKey();
+    if (apiKey == null || apiKey.trim().isEmpty) {
+      _phaseController.add(LiveCallPhase.error);
+      throw NoApiKeyConfiguredException();
+    }
+
+    final hasMicPermission = await _recorder.hasPermission();
+    if (!hasMicPermission) {
+      _phaseController.add(LiveCallPhase.error);
+      throw Exception('Microphone permission denied');
+    }
 
     if (!_playerReady) {
       await _player.init();
       _playerReady = true;
     }
 
+    final systemPrompt = _buildSystemPrompt(products, strings, isHindi: isHindi);
+    await _connect(apiKey: apiKey, systemPrompt: systemPrompt);
+  }
+
+  /// Reads the currently active Gemini Live API key from Firestore.
+  /// Kept as a separate, un-cached call (not read once and reused) so
+  /// every new call always picks up whatever the admin panel has set
+  /// most recently, without needing an app restart.
+  Future<String?> _fetchApiKey() async {
+    try {
+      final doc = await FirebaseFirestore.instance.collection('config').doc('geminiLiveApi').get();
+      return doc.data()?['apiKey'] as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _buildSystemPrompt(List<Product> products, AppStrings strings, {required bool isHindi}) {
     final catalogLines = products
         .where((p) => p.isActive && p.stock > 0)
         .map((p) =>
@@ -133,7 +193,7 @@ class LiveVoiceService {
         ? 'खरीदार ने हिंदी चुनी है — हमेशा हिंदी में बोलो (हिंग्लिश ठीक है), टूटी-फूटी भाषा में भी मतलब समझो।'
         : 'The buyer has chosen English — always reply in English, plain and conversational.';
 
-    final systemInstruction = Content.system('''
+    return '''
 You are GaonHaat's real, sensible voice assistant on a live phone call with a buyer — not a robot reading a script. $languageLine
 
 What's true about the app today (this can change, don't treat it as a rigid rulebook):
@@ -151,47 +211,235 @@ Tools:
   - status "failed": something went wrong — apologise briefly and ask them to try again in a moment.
 
 For anything about the app, an order, or a product, answer naturally and helpfully in your own words — vary your phrasing, don't recite a script. Only for things totally unrelated to GaonHaat (cricket, politics, etc.) politely say you can only help with GaonHaat. Keep replies short and conversational, like a real phone call.
-''');
+''';
+  }
 
-    final addToCartTool = FunctionDeclaration(
-      'addToCart',
-      "Adds the item the buyer asked for to their cart",
-      parameters: {
-        'productId': Schema.string(description: 'The exact id from the catalog list above'),
-        'quantity': Schema.integer(description: 'How much they asked for; 1 if not said'),
-      },
-    );
+  Future<void> _connect({required String apiKey, required String systemPrompt}) async {
+    _lastApiKey = apiKey;
+    _lastSystemPrompt = systemPrompt;
+    _setupComplete = false;
 
-    final confirmOrderTool = FunctionDeclaration(
-      'confirmOrder',
-      'Called when the buyer confirms they want to place the order with whatever is currently in the cart',
-      parameters: {},
-    );
-
-    final model = FirebaseAI.googleAI().liveGenerativeModel(
-      model: 'gemini-3.1-flash-live-preview',
-      liveGenerationConfig: LiveGenerationConfig(
-        responseModalities: [ResponseModalities.audio],
-        speechConfig: SpeechConfig(voiceName: 'Kore'),
-      ),
-      tools: [
-        Tool.functionDeclarations([addToCartTool, confirmOrderTool]),
-      ],
-      systemInstruction: systemInstruction,
+    final uri = Uri.parse(
+      'wss://generativelanguage.googleapis.com/ws/'
+      'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'
+      '?key=$apiKey',
     );
 
     try {
-      _session = await model.connect();
+      _channel = WebSocketChannel.connect(uri);
+      await _channel!.ready;
     } catch (e) {
       _phaseController.add(LiveCallPhase.error);
-      onError?.call(e.toString());
+      onError?.call('Could not connect: $e');
       return;
     }
 
-    // Play back whatever audio the model streams to us as it arrives —
-    // flutter_soloud supports feeding raw PCM chunks into a live audio
-    // stream source so playback starts almost the instant the first
-    // chunk lands, instead of waiting for the whole reply.
+    final setupMessage = {
+      'setup': {
+        'model': 'models/$_model',
+        'generationConfig': {
+          'responseModalities': ['AUDIO'],
+          'speechConfig': {
+            'voiceConfig': {
+              'prebuiltVoiceConfig': {'voiceName': 'Kore'},
+            },
+          },
+        },
+        'systemInstruction': {
+          'parts': [
+            {'text': systemPrompt},
+          ],
+        },
+        'tools': [
+          {
+            'functionDeclarations': [
+              {
+                'name': 'addToCart',
+                'description': "Adds the item the buyer asked for to their cart",
+                'parameters': {
+                  'type': 'OBJECT',
+                  'properties': {
+                    'productId': {
+                      'type': 'STRING',
+                      'description': 'The exact id from the catalog list above',
+                    },
+                    'quantity': {
+                      'type': 'INTEGER',
+                      'description': "How much they asked for; 1 if not said",
+                    },
+                  },
+                  'required': ['productId'],
+                },
+              },
+              {
+                'name': 'confirmOrder',
+                'description':
+                    'Called when the buyer confirms they want to place the order with whatever is currently in the cart',
+                'parameters': {'type': 'OBJECT', 'properties': {}},
+              },
+            ],
+          },
+        ],
+        // Tunes how Gemini decides when you've started/stopped talking —
+        // LOW sensitivity behaves more like a real call: it won't flinch
+        // at background noise, but still responds promptly on a pause.
+        'realtimeInputConfig': {
+          'automaticActivityDetection': {
+            'disabled': false,
+            'startOfSpeechSensitivity': 'START_SENSITIVITY_LOW',
+            'endOfSpeechSensitivity': 'END_SENSITIVITY_LOW',
+            'prefixPaddingMs': 200,
+            'silenceDurationMs': 500,
+          },
+          'activityHandling': 'START_OF_ACTIVITY_INTERRUPTS',
+        },
+      },
+    };
+    _channel!.sink.add(jsonEncode(setupMessage));
+
+    _wsSub = _channel!.stream.listen(
+      _handleServerMessage,
+      onError: (e) {
+        _phaseController.add(LiveCallPhase.error);
+        onError?.call('Connection error: $e');
+      },
+      onDone: () => _handleSocketClosed(),
+    );
+  }
+
+  void _handleSocketClosed() {
+    final code = _channel?.closeCode;
+    _micSub?.cancel();
+    _micSub = null;
+    _recorder.stop().catchError((_) => null);
+    _channel = null;
+
+    final unexpected = code != null && code != 1000;
+    if (!_manualDisconnect && unexpected && _reconnectAttempts < _maxReconnectAttempts) {
+      _reconnectAttempts++;
+      _phaseController.add(LiveCallPhase.connecting);
+      final key = _lastApiKey;
+      final prompt = _lastSystemPrompt;
+      Future.delayed(Duration(milliseconds: 800 * _reconnectAttempts), () {
+        if (_manualDisconnect || key == null || prompt == null) return;
+        _connect(apiKey: key, systemPrompt: prompt);
+      });
+      return;
+    }
+
+    if (!_manualDisconnect) {
+      onError?.call(unexpected ? 'Call dropped (code: $code)' : 'Call ended');
+    }
+    _phaseController.add(LiveCallPhase.ended);
+  }
+
+  void _handleServerMessage(dynamic raw) {
+    Map<String, dynamic> msg;
+    try {
+      final text = raw is String ? raw : utf8.decode(raw as List<int>);
+      msg = jsonDecode(text) as Map<String, dynamic>;
+    } catch (_) {
+      return;
+    }
+
+    if (msg.containsKey('error')) {
+      _phaseController.add(LiveCallPhase.error);
+      onError?.call('Server error: ${msg['error']}');
+      return;
+    }
+
+    if (msg.containsKey('setupComplete')) {
+      _setupComplete = true;
+      _reconnectAttempts = 0;
+      _startMicStreaming().catchError((e) {
+        _phaseController.add(LiveCallPhase.error);
+        onError?.call('Microphone streaming failed: $e');
+      });
+      _phaseController.add(LiveCallPhase.listening);
+      return;
+    }
+
+    if (msg.containsKey('toolCall')) {
+      final toolCall = msg['toolCall'] as Map<String, dynamic>;
+      final calls = toolCall['functionCalls'] as List<dynamic>? ?? [];
+      for (final raw in calls) {
+        final call = raw as Map<String, dynamic>;
+        final name = call['name'] as String?;
+        final id = call['id'] as String? ?? '';
+        final args = call['args'] as Map<String, dynamic>? ?? {};
+
+        if (name == 'addToCart') {
+          final productId = args['productId']?.toString() ?? '';
+          final quantity = int.tryParse(args['quantity']?.toString() ?? '1') ?? 1;
+          onOrderCall?.call(LiveOrderCall(functionCallId: id, productId: productId, quantity: quantity));
+          _sendToolResponse(id, 'addToCart', {'status': 'added'});
+        } else if (name == 'confirmOrder') {
+          onConfirmOrder?.call(LiveConfirmOrderCall(functionCallId: id));
+          // No response yet — the screen answers via respondToConfirmOrder
+          // once it's actually tried to place the order.
+        }
+      }
+      return;
+    }
+
+    final serverContent = msg['serverContent'] as Map<String, dynamic>?;
+    if (serverContent == null) return;
+
+    if (serverContent['interrupted'] == true) {
+      _handleBargeIn();
+    }
+
+    final outputTranscription = serverContent['outputTranscription'] as Map<String, dynamic>?;
+    if (outputTranscription != null && outputTranscription['text'] != null) {
+      onModelText?.call(outputTranscription['text'] as String);
+    }
+
+    final modelTurn = serverContent['modelTurn'] as Map<String, dynamic>?;
+    if (modelTurn != null) {
+      final parts = modelTurn['parts'] as List<dynamic>? ?? [];
+      for (final part in parts) {
+        final inlineData = (part as Map<String, dynamic>)['inlineData'] as Map<String, dynamic>?;
+        if (inlineData != null && inlineData['data'] != null) {
+          final bytes = base64Decode(inlineData['data'] as String);
+          _phaseController.add(LiveCallPhase.aiSpeaking);
+          if (_playbackSource != null) {
+            _player.addAudioDataStream(_playbackSource!, bytes);
+          }
+        }
+        final textPart = (part)['text'] as String?;
+        if (textPart != null && textPart.isNotEmpty) {
+          onModelText?.call(textPart);
+        }
+      }
+    }
+
+    if (serverContent['turnComplete'] == true) {
+      _phaseController.add(LiveCallPhase.listening);
+    }
+  }
+
+  /// The buyer started talking over the AI — Google's own barge-in
+  /// detection already stopped the model server-side; here we just
+  /// need to stop *our* playback immediately instead of finishing
+  /// whatever audio is already buffered, so it actually feels
+  /// interrupted rather than talking over them for another second.
+  Future<void> _handleBargeIn() async {
+    if (_playbackHandle != null) {
+      await _player.stop(_playbackHandle!);
+    }
+    if (_playbackSource != null) {
+      await _player.disposeSource(_playbackSource!);
+    }
+    _playbackSource = await _player.setBufferStream(
+      sampleRate: 24000,
+      channels: Channels.mono,
+      format: BufferType.s16le,
+      bufferingType: BufferingType.released,
+    );
+    _playbackHandle = await _player.play(_playbackSource!);
+  }
+
+  Future<void> _startMicStreaming() async {
     _playbackSource = await _player.setBufferStream(
       sampleRate: 24000,
       channels: Channels.mono,
@@ -200,52 +448,6 @@ For anything about the app, an order, or a product, answer naturally and helpful
     );
     _playbackHandle = await _player.play(_playbackSource!);
 
-    _receiveSub = _session!.receive().listen((response) {
-      final message = response.message;
-
-      if (message is LiveServerContent) {
-        final parts = message.modelTurn?.parts ?? [];
-        for (final part in parts) {
-          if (part is InlineDataPart && part.mimeType.startsWith('audio/pcm')) {
-            _phaseController.add(LiveCallPhase.aiSpeaking);
-            _player.addAudioDataStream(_playbackSource!, part.bytes);
-          } else if (part is TextPart) {
-            onModelText?.call(part.text);
-          }
-        }
-        if (message.turnComplete == true) {
-          _phaseController.add(LiveCallPhase.listening);
-        }
-      } else if (message is LiveServerToolCall) {
-        for (final call in message.functionCalls ?? []) {
-          if (call.name == 'addToCart') {
-            final productId = call.args['productId']?.toString() ?? '';
-            final quantity = int.tryParse(call.args['quantity']?.toString() ?? '1') ?? 1;
-            onOrderCall?.call(LiveOrderCall(
-              functionCallId: call.id ?? '',
-              productId: productId,
-              quantity: quantity,
-            ));
-            // Let the model know the tool call succeeded so it can
-            // continue the conversation naturally ("ठीक है, और कुछ?").
-            _session?.sendToolResponse([
-              FunctionResponse(call.name, {'status': 'added'}, id: call.id),
-            ]);
-          } else if (call.name == 'confirmOrder') {
-            onConfirmOrder?.call(LiveConfirmOrderCall(functionCallId: call.id ?? ''));
-            // No tool response yet — placing the order needs GPS +
-            // a network call, so the screen answers via
-            // respondToConfirmOrder once that finishes.
-          }
-        }
-      }
-    }, onError: (e) {
-      _phaseController.add(LiveCallPhase.error);
-      onError?.call(e.toString());
-    });
-
-    // Stream the mic straight to the session — 16kHz mono PCM is what
-    // the Live API expects for input audio.
     final micStream = await _recorder.startStream(const RecordConfig(
       encoder: AudioEncoder.pcm16bits,
       sampleRate: 16000,
@@ -254,11 +456,27 @@ For anything about the app, an order, or a product, answer naturally and helpful
     _micSub = micStream.listen((chunk) {
       // Mic keeps recording while muted (instant unmute, no restart)
       // but a muted buyer's audio shouldn't reach the model at all.
-      if (_isMuted) return;
-      _session?.sendAudioRealtime(InlineDataPart('audio/pcm', chunk));
+      if (_isMuted || _channel == null) return;
+      final message = {
+        'realtimeInput': {
+          'audio': {
+            'data': base64Encode(chunk),
+            'mimeType': 'audio/pcm;rate=16000',
+          },
+        },
+      };
+      _channel?.sink.add(jsonEncode(message));
     });
+  }
 
-    _phaseController.add(LiveCallPhase.listening);
+  void _sendToolResponse(String id, String name, Map<String, dynamic> response) {
+    _channel?.sink.add(jsonEncode({
+      'toolResponse': {
+        'functionResponses': [
+          {'id': id, 'name': name, 'response': response},
+        ],
+      },
+    }));
   }
 
   /// Answers a pending confirmOrder tool call once the screen has
@@ -267,22 +485,21 @@ For anything about the app, an order, or a product, answer naturally and helpful
   /// "empty", "location_error", or "failed" — the system prompt tells
   /// the model what to say for each.
   void respondToConfirmOrder(String functionCallId, String status) {
-    _session?.sendToolResponse([
-      FunctionResponse('confirmOrder', {'status': status}, id: functionCallId),
-    ]);
+    _sendToolResponse(functionCallId, 'confirmOrder', {'status': status});
   }
 
-  /// Ends the call — stops the mic, closes the session, stops playback.
+  /// Ends the call — stops the mic, closes the socket, stops playback.
   Future<void> stop() async {
+    _manualDisconnect = true;
     await _micSub?.cancel();
     _micSub = null;
     try {
       await _recorder.stop();
     } catch (_) {}
-    await _receiveSub?.cancel();
-    _receiveSub = null;
-    await _session?.close();
-    _session = null;
+    await _wsSub?.cancel();
+    _wsSub = null;
+    await _channel?.sink.close();
+    _channel = null;
     if (_playbackHandle != null) {
       await _player.stop(_playbackHandle!);
       _playbackHandle = null;
