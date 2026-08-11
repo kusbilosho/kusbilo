@@ -9,6 +9,7 @@ import '../../../../core/localization/app_strings.dart';
 import '../../../../core/localization/locale_provider.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../../core/widgets/shimmer_loading.dart';
 import '../../data/models/order.dart';
 
 /// Live tracking for a single order — status timeline + ETA countdown up
@@ -36,7 +37,7 @@ class OrderTrackingScreen extends StatelessWidget {
         stream: FirebaseFirestore.instance.collection('orders').doc(orderId).snapshots(),
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator(color: AppColors.green));
+            return const OrderTrackingSkeleton();
           }
           final raw = snapshot.data!.data();
           if (raw == null) {
