@@ -286,6 +286,34 @@ class _HomeTab extends StatelessWidget {
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 26, 20, 0),
           sliver: SliverToBoxAdapter(
+            child: Text(strings.categoriesTitle, style: AppTextStyles.display(fontSize: 18)),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisSpacing: 14,
+              crossAxisSpacing: 14,
+              childAspectRatio: 0.86,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, i) {
+                final cat = catalog.categories[i];
+                final items = catalog.productsByCategory(cat.id);
+                return GestureDetector(
+                  onTap: () => _openCategory(context, cat),
+                  child: _CategoryPreviewCard(category: cat, lang: lang, items: items),
+                );
+              },
+              childCount: catalog.categories.length,
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 26, 20, 0),
+          sliver: SliverToBoxAdapter(
             child: _SectionHeader(title: strings.featuredTitle, actionLabel: strings.seeAll),
           ),
         ),
@@ -310,6 +338,85 @@ class _HomeTab extends StatelessWidget {
 
   void _openCategory(BuildContext context, Category cat) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => _CategoryDetailScreen(category: cat)));
+  }
+}
+
+/// Blinkit-style category preview: a 2x2 grid of that category's product
+/// thumbnails inside a soft card, with an item-count badge and the
+/// category name below. Falls back to the category's own icon tile when
+/// it has no products yet, so an empty category never looks broken.
+class _CategoryPreviewCard extends StatelessWidget {
+  final Category category;
+  final AppLanguage lang;
+  final List<Product> items;
+
+  const _CategoryPreviewCard({required this.category, required this.lang, required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = items.take(4).toList();
+    final extra = items.length - preview.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.sage,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppColors.line, width: 1),
+                  ),
+                  padding: const EdgeInsets.all(6),
+                  child: preview.isEmpty
+                      ? Center(child: Icon(category.icon, color: category.color, size: 30))
+                      : GridView.count(
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 4,
+                          crossAxisSpacing: 4,
+                          physics: const NeverScrollableScrollPhysics(),
+                          children: preview
+                              .map((p) => ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Container(
+                                      color: Colors.white,
+                                      child: p.imageUrl != null && p.imageUrl!.isNotEmpty
+                                          ? Image.network(p.imageUrl!, fit: BoxFit.cover,
+                                              errorBuilder: (_, __, ___) => Center(
+                                                  child: Text(p.emoji.isNotEmpty ? p.emoji : '🛒',
+                                                      style: const TextStyle(fontSize: 16))))
+                                          : Center(
+                                              child: Text(p.emoji.isNotEmpty ? p.emoji : '🛒',
+                                                  style: const TextStyle(fontSize: 16))),
+                                    ),
+                                  ))
+                              .toList(),
+                        ),
+                ),
+              ),
+              if (extra > 0)
+                Positioned(
+                  bottom: 6,
+                  right: 6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                    child: Text('+$extra', style: AppTextStyles.caption(fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.mutedDark)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(category.name(lang),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: AppTextStyles.body(fontSize: 12, fontWeight: FontWeight.w700)),
+      ],
+    );
   }
 }
 
