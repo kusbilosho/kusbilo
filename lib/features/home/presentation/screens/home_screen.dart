@@ -463,10 +463,10 @@ class _CategoriesTab extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              mainAxisSpacing: 14,
-              crossAxisSpacing: 14,
-              childAspectRatio: 1.05,
+              crossAxisCount: 3,
+              mainAxisSpacing: 18,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.8,
             ),
             delegate: SliverChildBuilderDelegate(
               (context, i) {
@@ -917,52 +917,54 @@ class _CategoryBigCard extends StatelessWidget {
     required this.onTap,
   });
 
+  bool get _hasImage => imageUrl != null && imageUrl!.isNotEmpty;
+
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.line, width: 1),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(color: color.withOpacity(0.12), shape: BoxShape.circle),
-              child: (imageUrl != null && imageUrl!.isNotEmpty)
-                  ? ClipOval(
-                      // Same zoom-crop as the small Home circle — pulls
-                      // the subject out from the middle of whatever
-                      // plain background the source photo was shot on.
-                      child: Transform.scale(
-                        scale: 1.35,
-                        child: Image.network(
-                          imageUrl!,
-                          width: 48,
-                          height: 48,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 24),
-                        ),
-                      ),
-                    )
-                  : Icon(icon, color: color, size: 24),
+      borderRadius: BorderRadius.circular(100),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 92,
+            height: 92,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              shape: BoxShape.circle,
+              border: Border.all(color: AppColors.line, width: 1),
             ),
-            const Spacer(),
-            Text(label,
-                style: AppTextStyles.body(fontSize: 15, fontWeight: FontWeight.w700),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 2),
-            Text(itemsLabel, style: AppTextStyles.caption(fontSize: 12, color: AppColors.mutedDark)),
-          ],
-        ),
+            // Admin-uploaded category photo fills the circle; the icon is
+            // only the fallback for categories without a photo yet.
+            child: _hasImage
+                ? ClipOval(
+                    // Zoom-crop pulls the subject out from the middle of
+                    // whatever plain background the source photo has.
+                    child: Transform.scale(
+                      scale: 1.35,
+                      child: Image.network(
+                        imageUrl!,
+                        width: 92,
+                        height: 92,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 36),
+                      ),
+                    ),
+                  )
+                : Icon(icon, color: color, size: 36),
+          ),
+          const SizedBox(height: 8),
+          Text(label,
+              textAlign: TextAlign.center,
+              style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.charcoal),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 2),
+          Text(itemsLabel,
+              textAlign: TextAlign.center,
+              style: AppTextStyles.caption(fontSize: 12, color: AppColors.mutedDark)),
+        ],
       ),
     );
   }
