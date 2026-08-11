@@ -276,10 +276,38 @@ class _HomeTab extends StatelessWidget {
                   final cat = catalog.categories[i];
                   return GestureDetector(
                     onTap: () => _openCategory(context, cat),
-                    child: _CategoryCircle(label: cat.name(lang), icon: cat.icon, color: cat.color),
+                    child: _CategoryCircle(label: cat.name(lang), icon: cat.icon, color: cat.color, imageUrl: cat.imageUrl),
                   );
                 },
               ),
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 26, 20, 0),
+          sliver: SliverToBoxAdapter(
+            child: Text(strings.categoriesTitle, style: AppTextStyles.display(fontSize: 18)),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisSpacing: 14,
+              crossAxisSpacing: 14,
+              childAspectRatio: 0.86,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, i) {
+                final cat = catalog.categories[i];
+                final items = catalog.productsByCategory(cat.id);
+                return GestureDetector(
+                  onTap: () => _openCategory(context, cat),
+                  child: _CategoryPreviewCard(category: cat, lang: lang, items: items),
+                );
+              },
+              childCount: catalog.categories.length,
             ),
           ),
         ),
@@ -310,6 +338,85 @@ class _HomeTab extends StatelessWidget {
 
   void _openCategory(BuildContext context, Category cat) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => _CategoryDetailScreen(category: cat)));
+  }
+}
+
+/// Blinkit-style category preview: a 2x2 grid of that category's product
+/// thumbnails inside a soft card, with an item-count badge and the
+/// category name below. Falls back to the category's own icon tile when
+/// it has no products yet, so an empty category never looks broken.
+class _CategoryPreviewCard extends StatelessWidget {
+  final Category category;
+  final AppLanguage lang;
+  final List<Product> items;
+
+  const _CategoryPreviewCard({required this.category, required this.lang, required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = items.take(4).toList();
+    final extra = items.length - preview.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.sage,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppColors.line, width: 1),
+                  ),
+                  padding: const EdgeInsets.all(6),
+                  child: preview.isEmpty
+                      ? Center(child: Icon(category.icon, color: category.color, size: 30))
+                      : GridView.count(
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 4,
+                          crossAxisSpacing: 4,
+                          physics: const NeverScrollableScrollPhysics(),
+                          children: preview
+                              .map((p) => ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Container(
+                                      color: Colors.white,
+                                      child: p.imageUrl != null && p.imageUrl!.isNotEmpty
+                                          ? Image.network(p.imageUrl!, fit: BoxFit.cover,
+                                              errorBuilder: (_, __, ___) => Center(
+                                                  child: Text(p.emoji.isNotEmpty ? p.emoji : '🛒',
+                                                      style: const TextStyle(fontSize: 16))))
+                                          : Center(
+                                              child: Text(p.emoji.isNotEmpty ? p.emoji : '🛒',
+                                                  style: const TextStyle(fontSize: 16))),
+                                    ),
+                                  ))
+                              .toList(),
+                        ),
+                ),
+              ),
+              if (extra > 0)
+                Positioned(
+                  bottom: 6,
+                  right: 6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                    child: Text('+$extra', style: AppTextStyles.caption(fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.mutedDark)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(category.name(lang),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: AppTextStyles.body(fontSize: 12, fontWeight: FontWeight.w700)),
+      ],
+    );
   }
 }
 
@@ -369,6 +476,7 @@ class _CategoriesTab extends StatelessWidget {
                   label: cat.name(lang),
                   icon: cat.icon,
                   color: cat.color,
+                  imageUrl: cat.imageUrl,
                   itemsLabel: strings.itemsCount(count),
                   onTap: () => Navigator.of(context)
                       .push(MaterialPageRoute(builder: (_) => _CategoryDetailScreen(category: cat))),
@@ -742,7 +850,8 @@ class _CategoryCircle extends StatelessWidget {
   final String label;
   final IconData icon;
   final Color color;
-  const _CategoryCircle({required this.label, required this.icon, required this.color});
+  final String? imageUrl;
+  const _CategoryCircle({required this.label, required this.icon, required this.color, this.imageUrl});
 
   @override
   Widget build(BuildContext context) {
@@ -754,7 +863,27 @@ class _CategoryCircle extends StatelessWidget {
             width: 56,
             height: 56,
             decoration: BoxDecoration(color: color.withOpacity(0.12), shape: BoxShape.circle),
-            child: Icon(icon, color: color, size: 26),
+            // Admin-uploaded category photo takes over from the icon
+            // whenever one is set — the icon stays as the fallback for
+            // every category that hasn't had a photo added yet.
+            child: (imageUrl != null && imageUrl!.isNotEmpty)
+                ? ClipOval(
+                    // A 1.35x zoom crops away the plain background that
+                    // most product-style photos are shot with, so the
+                    // subject fills the circle instead of floating in
+                    // the middle of visible white space.
+                    child: Transform.scale(
+                      scale: 1.35,
+                      child: Image.network(
+                        imageUrl!,
+                        width: 56,
+                        height: 56,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 26),
+                      ),
+                    ),
+                  )
+                : Icon(icon, color: color, size: 26),
           ),
           const SizedBox(height: 6),
           Text(
@@ -775,6 +904,7 @@ class _CategoryBigCard extends StatelessWidget {
   final String label;
   final IconData icon;
   final Color color;
+  final String? imageUrl;
   final String itemsLabel;
   final VoidCallback onTap;
 
@@ -782,6 +912,7 @@ class _CategoryBigCard extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.color,
+    this.imageUrl,
     required this.itemsLabel,
     required this.onTap,
   });
@@ -805,7 +936,23 @@ class _CategoryBigCard extends StatelessWidget {
               width: 48,
               height: 48,
               decoration: BoxDecoration(color: color.withOpacity(0.12), shape: BoxShape.circle),
-              child: Icon(icon, color: color, size: 24),
+              child: (imageUrl != null && imageUrl!.isNotEmpty)
+                  ? ClipOval(
+                      // Same zoom-crop as the small Home circle — pulls
+                      // the subject out from the middle of whatever
+                      // plain background the source photo was shot on.
+                      child: Transform.scale(
+                        scale: 1.35,
+                        child: Image.network(
+                          imageUrl!,
+                          width: 48,
+                          height: 48,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 24),
+                        ),
+                      ),
+                    )
+                  : Icon(icon, color: color, size: 24),
             ),
             const Spacer(),
             Text(label,
