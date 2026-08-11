@@ -79,6 +79,7 @@ class CatalogProvider extends ChangeNotifier {
       nameEn: data['nameEn'] as String,
       icon: _iconForName(data['iconName'] as String),
       color: Color(data['colorValue'] as int),
+      imageUrl: data['imageUrl'] as String?,
     );
   }
 
