@@ -46,6 +46,10 @@ class AddressesProvider extends ChangeNotifier {
   bool _loaded = false;
 
   List<SavedAddress> get addresses => List.unmodifiable(_addresses);
+  // Only true before the first successful load — used by the addresses
+  // screen to show a shimmer skeleton instead of briefly flashing the
+  // "no addresses" empty state while the real list is still loading.
+  bool get isLoading => !_loaded;
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
