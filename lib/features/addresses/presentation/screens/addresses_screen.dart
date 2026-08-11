@@ -5,6 +5,7 @@ import '../../../../core/services/location_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/widgets/primary_button.dart';
+import '../../../../core/widgets/shimmer_loading.dart';
 import '../providers/addresses_provider.dart';
 
 class AddressesScreen extends StatefulWidget {
@@ -144,7 +145,8 @@ class _AddressesScreenState extends State<AddressesScreen> {
   @override
   Widget build(BuildContext context) {
     final strings = context.watch<LocaleProvider>().strings;
-    final addresses = context.watch<AddressesProvider>().addresses;
+    final addressesProvider = context.watch<AddressesProvider>();
+    final addresses = addressesProvider.addresses;
 
     return Scaffold(
       backgroundColor: AppColors.cream,
@@ -155,7 +157,9 @@ class _AddressesScreenState extends State<AddressesScreen> {
         iconTheme: const IconThemeData(color: AppColors.charcoal),
       ),
       body: SafeArea(
-        child: addresses.isEmpty
+        child: addressesProvider.isLoading
+            ? const ShimmerListSkeleton()
+            : addresses.isEmpty
             ? Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
