@@ -1,7 +1,18 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'models/category.dart';
 import 'models/product.dart';
+
+/// How long we wait for a single Firestore call inside [CatalogProvider.load]
+/// before giving up and surfacing an error. Without this, a stalled network
+/// request (app resumed after being backgrounded for a long time, a flaky
+/// connection, etc.) leaves [CatalogProvider.status] stuck at `loading`
+/// forever — since nothing ever completes the `await`, the `catch` block
+/// never runs either, so the UI has no way to show a retry option and just
+/// spins indefinitely.
+const _catalogFetchTimeout = Duration(seconds: 12);
 
 enum CatalogStatus { idle, loading, loaded, error }
 
@@ -52,18 +63,31 @@ class CatalogProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _seedIfEmpty();
+      await _seedIfEmpty().timeout(_catalogFetchTimeout);
 
-      final categorySnap = await _firestore.collection('categories').get();
+      final categorySnap = await _firestore
+          .collection('categories')
+          .get()
+          .timeout(_catalogFetchTimeout);
       _categories = categorySnap.docs.map(_categoryFromDoc).toList();
 
-      final productSnap = await _firestore.collection('products').get();
+      final productSnap = await _firestore
+          .collection('products')
+          .get()
+          .timeout(_catalogFetchTimeout);
       _products = productSnap.docs
           .map(_productFromDoc)
           .where((p) => p.isActive && p.stock > 0)
           .toList();
 
       _status = CatalogStatus.loaded;
+    } on TimeoutException catch (_) {
+      // The request never came back (stalled connection, app resumed after
+      // being backgrounded a long time, etc.) — surface this as a normal
+      // error instead of leaving the UI stuck on the loading skeleton.
+      _status = CatalogStatus.error;
+      _errorMessage =
+          'Connection is taking too long. Please check your internet and try again.';
     } catch (e) {
       _status = CatalogStatus.error;
       _errorMessage = e.toString();
