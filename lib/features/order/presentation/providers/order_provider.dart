@@ -21,6 +21,11 @@ class OrderProvider extends ChangeNotifier {
 
   List<Order> get myOrders => _myOrders;
   bool get isPlacing => _placing;
+  // Only true before the first successful load — used by the order
+  // history screen to show a shimmer skeleton instead of briefly
+  // flashing the "no orders" empty state while the real list is
+  // still on its way from Firestore.
+  bool get isLoading => !_loaded;
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
