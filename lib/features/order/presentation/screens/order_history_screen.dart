@@ -4,6 +4,7 @@ import '../../../../core/localization/app_strings.dart';
 import '../../../../core/localization/locale_provider.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../../core/widgets/shimmer_loading.dart';
 import '../../data/models/order.dart';
 import '../providers/order_provider.dart';
 import 'order_tracking_screen.dart';
@@ -30,7 +31,8 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final strings = context.watch<LocaleProvider>().strings;
-    final orders = context.watch<OrderProvider>().myOrders;
+    final orderProvider = context.watch<OrderProvider>();
+    final orders = orderProvider.myOrders;
 
     return Scaffold(
       backgroundColor: AppColors.cream,
@@ -41,7 +43,9 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
         iconTheme: const IconThemeData(color: AppColors.charcoal),
       ),
       body: SafeArea(
-        child: orders.isEmpty
+        child: orderProvider.isLoading
+            ? const ShimmerListSkeleton()
+            : orders.isEmpty
             ? _EmptyOrders(strings: strings)
             : RefreshIndicator(
                 onRefresh: () => context.read<OrderProvider>().load(forceRefresh: true),
