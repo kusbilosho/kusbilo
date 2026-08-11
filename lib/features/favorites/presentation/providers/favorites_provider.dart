@@ -15,6 +15,10 @@ class FavoritesProvider extends ChangeNotifier {
 
   Set<String> get productIds => _productIds;
   bool isFavorite(String productId) => _productIds.contains(productId);
+  // Only true before the first successful load — used by the wishlist
+  // screen to show a shimmer skeleton instead of briefly flashing the
+  // "no favorites" empty state while the real list is still loading.
+  bool get isLoading => !_loaded;
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
