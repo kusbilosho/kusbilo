@@ -53,6 +53,10 @@ dependencies:
   geolocator: ^13.0.1
   geocoding: ^3.0.0
 
+  # Shimmer/skeleton loading placeholders used across the app while
+  # content (catalog, orders, etc.) is being fetched.
+  shimmer: ^3.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
