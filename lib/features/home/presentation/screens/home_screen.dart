@@ -203,17 +203,58 @@ class _BottomNav extends StatelessWidget {
   }
 }
 
-class _HomeTab extends StatelessWidget {
+class _HomeTab extends StatefulWidget {
   final VoidCallback onGoToCategories;
   const _HomeTab({required this.onGoToCategories});
+
+  @override
+  State<_HomeTab> createState() => _HomeTabState();
+}
+
+// Converted from StatelessWidget to StatefulWidget with a manual
+// addListener() subscription to CatalogProvider. `context.watch` *should*
+// rebuild this on its own, but real-device reports showed the tab staying
+// stuck on the skeleton even after the catalog had actually finished
+// loading (confirmed because re-selecting the already-active Home tab —
+// which force-rebuilds this widget from scratch — immediately showed the
+// real data). Subscribing directly with addListener()/setState() removes
+// any dependency on that InheritedWidget propagation path entirely, so
+// this widget is guaranteed to rebuild the moment CatalogProvider calls
+// notifyListeners(), no matter what.
+class _HomeTabState extends State<_HomeTab> {
+  CatalogProvider? _catalog;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final catalog = context.read<CatalogProvider>();
+    if (!identical(_catalog, catalog)) {
+      _catalog?.removeListener(_onCatalogChanged);
+      _catalog = catalog;
+      _catalog!.addListener(_onCatalogChanged);
+    }
+  }
+
+  void _onCatalogChanged() {
+    debugPrint('[HomeTab] manual listener fired — catalog.status=${_catalog?.status}');
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _catalog?.removeListener(_onCatalogChanged);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final strings = context.watch<LocaleProvider>().strings;
     final lang = context.watch<LocaleProvider>().language;
-    final catalog = context.watch<CatalogProvider>();
+    final catalog = _catalog!;
+    debugPrint('[HomeTab] build() called — catalog.status=${catalog.status}');
 
     if (catalog.isLoading || catalog.status == CatalogStatus.idle) {
+      debugPrint('[HomeTab] showing skeleton (status=${catalog.status})');
       return const HomeTabSkeleton();
     }
 
@@ -251,7 +292,7 @@ class _HomeTab extends StatelessWidget {
                 _SectionHeader(
                   title: strings.categoriesTitle,
                   actionLabel: strings.seeAll,
-                  onActionTap: onGoToCategories,
+                  onActionTap: widget.onGoToCategories,
                 ),
                 const SizedBox(height: 12),
                 if (catalog.status == CatalogStatus.error)
