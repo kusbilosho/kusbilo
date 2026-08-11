@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../../core/localization/locale_provider.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../../core/widgets/shimmer_loading.dart';
 import '../../../cart/presentation/providers/cart_provider.dart';
 import '../../../home/data/catalog_provider.dart';
 import '../providers/favorites_provider.dart';
@@ -27,7 +28,8 @@ class _WishlistScreenState extends State<WishlistScreen> {
   Widget build(BuildContext context) {
     final strings = context.watch<LocaleProvider>().strings;
     final lang = context.watch<LocaleProvider>().language;
-    final favoriteIds = context.watch<FavoritesProvider>().productIds;
+    final favoritesProvider = context.watch<FavoritesProvider>();
+    final favoriteIds = favoritesProvider.productIds;
     final catalog = context.watch<CatalogProvider>();
     final cart = context.watch<CartProvider>();
 
@@ -46,7 +48,9 @@ class _WishlistScreenState extends State<WishlistScreen> {
         iconTheme: const IconThemeData(color: AppColors.charcoal),
       ),
       body: SafeArea(
-        child: items.isEmpty
+        child: favoritesProvider.isLoading
+            ? const ShimmerListSkeleton()
+            : items.isEmpty
             ? Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
