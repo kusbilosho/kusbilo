@@ -845,6 +845,13 @@ class _ProductCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.line, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.charcoal.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -852,43 +859,66 @@ class _ProductCard extends StatelessWidget {
           Expanded(
             child: Stack(
               children: [
-                Center(
-                  child: product.imageUrl != null
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Image.network(
-                            product.imageUrl!,
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            height: double.infinity,
-                            errorBuilder: (_, __, ___) =>
-                                Text(product.emoji, style: const TextStyle(fontSize: 40)),
-                          ),
-                        )
-                      : Text(product.emoji, style: const TextStyle(fontSize: 40)),
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      color: AppColors.sage,
+                      child: Center(
+                        child: product.imageUrl != null && product.imageUrl!.isNotEmpty
+                            ? Image.network(
+                                product.imageUrl!,
+                                fit: BoxFit.cover,
+                                width: double.infinity,
+                                height: double.infinity,
+                                loadingBuilder: (context, child, progress) {
+                                  if (progress == null) return child;
+                                  // Soft pulsing placeholder instead of a
+                                  // blank box while the image streams in.
+                                  return TweenAnimationBuilder<double>(
+                                    tween: Tween(begin: 0.4, end: 1.0),
+                                    duration: const Duration(milliseconds: 700),
+                                    curve: Curves.easeInOut,
+                                    builder: (context, value, _) => Opacity(
+                                      opacity: value,
+                                      child: Icon(Icons.image_outlined, color: AppColors.inactive, size: 32),
+                                    ),
+                                  );
+                                },
+                                errorBuilder: (_, __, ___) =>
+                                    Text(product.emoji.isNotEmpty ? product.emoji : '🛒', style: const TextStyle(fontSize: 40)),
+                              )
+                            : Text(product.emoji.isNotEmpty ? product.emoji : '🛒', style: const TextStyle(fontSize: 40)),
+                      ),
+                    ),
+                  ),
                 ),
                 Positioned(
-                  top: 0,
-                  right: 0,
+                  top: 6,
+                  right: 6,
                   child: GestureDetector(
                     onTap: () => context.read<FavoritesProvider>().toggle(product.id),
-                    child: Icon(
-                      isFavorite ? Icons.favorite : Icons.favorite_border,
-                      size: 18,
-                      color: isFavorite ? const Color(0xFFC0453B) : AppColors.inactive,
+                    child: Container(
+                      padding: const EdgeInsets.all(5),
+                      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                      child: Icon(
+                        isFavorite ? Icons.favorite : Icons.favorite_border,
+                        size: 16,
+                        color: isFavorite ? const Color(0xFFC0453B) : AppColors.inactive,
+                      ),
                     ),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(product.name(lang),
               style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w700),
               maxLines: 1,
               overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 2),
-          Text(product.priceDisplay, style: AppTextStyles.caption(fontSize: 12, color: AppColors.mutedDark)),
+          const SizedBox(height: 3),
+          Text(product.priceDisplay, style: AppTextStyles.body(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.green)),
           const SizedBox(height: 8),
           SizedBox(
             width: double.infinity,
