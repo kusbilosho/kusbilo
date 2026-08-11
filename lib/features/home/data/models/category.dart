@@ -10,6 +10,7 @@ class Category {
   final String nameEn;
   final IconData icon;
   final Color color;
+  final String? imageUrl;
 
   const Category({
     required this.id,
@@ -17,6 +18,7 @@ class Category {
     required this.nameEn,
     required this.icon,
     required this.color,
+    this.imageUrl,
   });
 
   String name(AppLanguage language) => language == AppLanguage.hindi ? nameHi : nameEn;
