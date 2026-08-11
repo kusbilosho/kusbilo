@@ -60,16 +60,39 @@ class HomeShellScreen extends StatefulWidget {
   State<HomeShellScreen> createState() => _HomeShellScreenState();
 }
 
-class _HomeShellScreenState extends State<HomeShellScreen> {
+class _HomeShellScreenState extends State<HomeShellScreen> with WidgetsBindingObserver {
   int _tabIndex = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     context.read<CatalogProvider>().load();
     context.read<MerchantProvider>().load();
     context.read<CartProvider>().load();
     context.read<FavoritesProvider>().load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // If the app sat in the background for a while (or its very first fetch
+  // never finished before the user left it), retry the catalog fetch when
+  // the app comes back to the foreground instead of leaving Home stuck on
+  // whatever state it was last in. `load()` itself is now timeout-guarded,
+  // so this only ever retries a genuinely unfinished/failed fetch — it's a
+  // no-op once the catalog has actually loaded.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      final catalog = context.read<CatalogProvider>();
+      if (catalog.status != CatalogStatus.loaded) {
+        catalog.load(forceRefresh: true);
+      }
+    }
   }
 
   @override
