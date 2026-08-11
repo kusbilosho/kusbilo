@@ -276,7 +276,7 @@ class _HomeTab extends StatelessWidget {
                   final cat = catalog.categories[i];
                   return GestureDetector(
                     onTap: () => _openCategory(context, cat),
-                    child: _CategoryCircle(label: cat.name(lang), icon: cat.icon, color: cat.color),
+                    child: _CategoryCircle(label: cat.name(lang), icon: cat.icon, color: cat.color, imageUrl: cat.imageUrl),
                   );
                 },
               ),
@@ -476,6 +476,7 @@ class _CategoriesTab extends StatelessWidget {
                   label: cat.name(lang),
                   icon: cat.icon,
                   color: cat.color,
+                  imageUrl: cat.imageUrl,
                   itemsLabel: strings.itemsCount(count),
                   onTap: () => Navigator.of(context)
                       .push(MaterialPageRoute(builder: (_) => _CategoryDetailScreen(category: cat))),
@@ -849,7 +850,8 @@ class _CategoryCircle extends StatelessWidget {
   final String label;
   final IconData icon;
   final Color color;
-  const _CategoryCircle({required this.label, required this.icon, required this.color});
+  final String? imageUrl;
+  const _CategoryCircle({required this.label, required this.icon, required this.color, this.imageUrl});
 
   @override
   Widget build(BuildContext context) {
@@ -861,7 +863,20 @@ class _CategoryCircle extends StatelessWidget {
             width: 56,
             height: 56,
             decoration: BoxDecoration(color: color.withOpacity(0.12), shape: BoxShape.circle),
-            child: Icon(icon, color: color, size: 26),
+            // Admin-uploaded category photo takes over from the icon
+            // whenever one is set — the icon stays as the fallback for
+            // every category that hasn't had a photo added yet.
+            child: (imageUrl != null && imageUrl!.isNotEmpty)
+                ? ClipOval(
+                    child: Image.network(
+                      imageUrl!,
+                      width: 56,
+                      height: 56,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 26),
+                    ),
+                  )
+                : Icon(icon, color: color, size: 26),
           ),
           const SizedBox(height: 6),
           Text(
@@ -882,6 +897,7 @@ class _CategoryBigCard extends StatelessWidget {
   final String label;
   final IconData icon;
   final Color color;
+  final String? imageUrl;
   final String itemsLabel;
   final VoidCallback onTap;
 
@@ -889,6 +905,7 @@ class _CategoryBigCard extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.color,
+    this.imageUrl,
     required this.itemsLabel,
     required this.onTap,
   });
@@ -912,7 +929,17 @@ class _CategoryBigCard extends StatelessWidget {
               width: 48,
               height: 48,
               decoration: BoxDecoration(color: color.withOpacity(0.12), shape: BoxShape.circle),
-              child: Icon(icon, color: color, size: 24),
+              child: (imageUrl != null && imageUrl!.isNotEmpty)
+                  ? ClipOval(
+                      child: Image.network(
+                        imageUrl!,
+                        width: 48,
+                        height: 48,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 24),
+                      ),
+                    )
+                  : Icon(icon, color: color, size: 24),
             ),
             const Spacer(),
             Text(label,
