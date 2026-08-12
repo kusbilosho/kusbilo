@@ -20,12 +20,39 @@ class OrderHistoryScreen extends StatefulWidget {
 }
 
 class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
+  OrderProvider? _orderProvider;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<OrderProvider>().load();
     });
+  }
+
+  // Same belt-and-suspenders fix as Home: subscribe directly with
+  // addListener()/setState() instead of relying only on context.watch,
+  // so this screen is guaranteed to refresh the moment OrderProvider's
+  // data changes, regardless of any InheritedWidget propagation timing.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final provider = context.read<OrderProvider>();
+    if (!identical(_orderProvider, provider)) {
+      _orderProvider?.removeListener(_onOrdersChanged);
+      _orderProvider = provider;
+      _orderProvider!.addListener(_onOrdersChanged);
+    }
+  }
+
+  void _onOrdersChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _orderProvider?.removeListener(_onOrdersChanged);
+    super.dispose();
   }
 
   @override
@@ -43,7 +70,12 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
         iconTheme: const IconThemeData(color: AppColors.charcoal),
       ),
       body: SafeArea(
-        child: orderProvider.isLoading
+        child: orderProvider.errorMessage != null
+            ? _OrdersError(
+                message: orderProvider.errorMessage!,
+                onRetry: () => context.read<OrderProvider>().load(forceRefresh: true),
+              )
+            : orderProvider.isLoading
             ? const ShimmerListSkeleton()
             : orders.isEmpty
             ? _EmptyOrders(strings: strings)
@@ -56,6 +88,45 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                   itemBuilder: (context, i) => _OrderCard(order: orders[i], strings: strings),
                 ),
               ),
+      ),
+    );
+  }
+}
+
+class _OrdersError extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _OrdersError({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.cloud_off_rounded, size: 48, color: AppColors.inactive),
+            const SizedBox(height: 12),
+            Text('कुछ गड़बड़ हो गई', style: AppTextStyles.display(fontSize: 16)),
+            const SizedBox(height: 6),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: AppTextStyles.caption(fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: const Text('फिर से कोशिश करें'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.green,
+                side: const BorderSide(color: AppColors.green),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
