@@ -806,20 +806,8 @@ class AppStrings {
   String get liveCallPlacingOrderLabel => _isHindi ? 'ऑर्डर दिया जा रहा है...' : 'Placing your order...';
 
   String get liveCallNoApiKeyError => _isHindi
-      ? 'वॉइस कॉल के लिए पहले अपनी Gemini API key डालें।'
-      : 'Add your Gemini API key first to use voice calls.';
-
-  String get liveCallSetupTitle => _isHindi ? 'वॉइस कॉल शुरू करें' : 'Set up voice calls';
-
-  String get liveCallSetupBody => _isHindi
-      ? 'एक बार अपनी मुफ़्त Gemini API key डालें — यह सिर्फ़ इसी फ़ोन पर सुरक्षित रहती है, कहीं और नहीं भेजी जाती।'
-      : 'Enter your free Gemini API key once — it stays only on this phone, never sent anywhere else.';
-
-  String get liveCallApiKeyHint => _isHindi ? 'अपनी Gemini API key यहाँ डालें' : 'Paste your Gemini API key here';
-
-  String get liveCallGetKeyLink => _isHindi ? 'मुफ़्त key यहाँ से लें: aistudio.google.com/apikey' : 'Get a free key at aistudio.google.com/apikey';
-
-  String get liveCallSaveKeyButton => _isHindi ? 'सेव करके शुरू करें' : 'Save and start';
+      ? 'वॉइस कॉल अभी सेटअप हो रही है, थोड़ी देर बाद कोशिश करें।'
+      : 'Voice call is still being set up — please try again in a bit.';
 
   // ---- Turn-based voice ordering (listen -> think -> speak loop) ----
 
