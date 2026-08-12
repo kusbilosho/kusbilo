@@ -44,9 +44,6 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
   String _captionLine = '';
   bool _ended = false;
   bool _placingOrder = false;
-  bool _needsApiKey = false;
-  bool _savingKey = false;
-  final _apiKeyController = TextEditingController();
   final List<String> _addedLines = [];
 
   @override
@@ -85,7 +82,6 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
       setState(() {
         _phase = LiveCallPhase.error;
         if (e is NoApiKeyConfiguredException) {
-          _needsApiKey = true;
           _errorText = strings.liveCallNoApiKeyError;
         } else if (e.toString().contains('ermission')) {
           _errorText = strings.liveCallMicPermissionError;
@@ -94,24 +90,6 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
         }
       });
     }
-  }
-
-  /// Saves the key the buyer just typed (locally, on-device only — see
-  /// LiveVoiceService.saveApiKey) and immediately retries the call so
-  /// there's no extra tap needed.
-  Future<void> _saveKeyAndRetry() async {
-    final key = _apiKeyController.text.trim();
-    if (key.isEmpty) return;
-    setState(() => _savingKey = true);
-    await LiveVoiceService.saveApiKey(key);
-    if (!mounted) return;
-    setState(() {
-      _savingKey = false;
-      _needsApiKey = false;
-      _errorText = null;
-      _phase = LiveCallPhase.connecting;
-    });
-    _startSession();
   }
 
   void _handleOrderCall(LiveOrderCall call) {
@@ -212,7 +190,6 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
   void dispose() {
     _ended = true;
     _service.dispose();
-    _apiKeyController.dispose();
     super.dispose();
   }
 
@@ -358,7 +335,6 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
           ],
         );
       case LiveCallPhase.error:
-        if (_needsApiKey) return _buildApiKeyPrompt(strings);
         return Column(
           children: [
             const Icon(Icons.error_outline, color: Color(0xFFC0453B), size: 44),
@@ -368,61 +344,7 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
           ],
         );
       case LiveCallPhase.ended:
-        if (_errorText != null) {
-          return Column(
-            children: [
-              const Icon(Icons.error_outline, color: Color(0xFFC0453B), size: 44),
-              const SizedBox(height: 12),
-              Text(_errorText!, textAlign: TextAlign.center, style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w600)),
-            ],
-          );
-        }
         return const SizedBox(height: 84);
     }
-  }
-
-  /// Shown the first time (or after clearing the key) instead of the
-  /// generic error — lets the buyer paste their own free Gemini API key
-  /// right here and retry immediately, no separate settings screen.
-  Widget _buildApiKeyPrompt(dynamic strings) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Icon(Icons.key_rounded, color: AppColors.green, size: 36),
-        const SizedBox(height: 10),
-        Text(strings.liveCallSetupTitle,
-            textAlign: TextAlign.center, style: AppTextStyles.body(fontSize: 15, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 6),
-        Text(strings.liveCallSetupBody,
-            textAlign: TextAlign.center, style: AppTextStyles.caption(fontSize: 12)),
-        const SizedBox(height: 14),
-        TextField(
-          controller: _apiKeyController,
-          obscureText: true,
-          decoration: InputDecoration(
-            hintText: strings.liveCallApiKeyHint,
-            isDense: true,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(strings.liveCallGetKeyLink,
-            textAlign: TextAlign.center, style: AppTextStyles.caption(fontSize: 11)),
-        const SizedBox(height: 14),
-        ElevatedButton(
-          onPressed: _savingKey ? null : _saveKeyAndRetry,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.green,
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-          child: _savingKey
-              ? const SizedBox(
-                  width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : Text(strings.liveCallSaveKeyButton,
-                  style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white)),
-        ),
-      ],
-    );
   }
 }
