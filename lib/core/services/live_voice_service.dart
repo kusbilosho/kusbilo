@@ -73,7 +73,7 @@ class NoApiKeyConfiguredException implements Exception {
 ///    the same location-detect + placeOrder flow the old checkout used,
 ///    then report back success/failure with [respondToConfirmOrder].
 class LiveVoiceService {
-  static const _model = 'gemini-2.0-flash-live-001';
+  static const _model = 'gemini-3.1-flash-live-preview';
 
   WebSocketChannel? _channel;
   StreamSubscription? _wsSub;
