@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -18,6 +20,7 @@ class OrderProvider extends ChangeNotifier {
   List<Order> _myOrders = [];
   bool _loaded = false;
   bool _placing = false;
+  String? _errorMessage;
 
   List<Order> get myOrders => _myOrders;
   bool get isPlacing => _placing;
@@ -25,7 +28,8 @@ class OrderProvider extends ChangeNotifier {
   // history screen to show a shimmer skeleton instead of briefly
   // flashing the "no orders" empty state while the real list is
   // still on its way from Firestore.
-  bool get isLoading => !_loaded;
+  bool get isLoading => !_loaded && _errorMessage == null;
+  String? get errorMessage => _errorMessage;
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
@@ -34,14 +38,31 @@ class OrderProvider extends ChangeNotifier {
     final uid = _uid;
     if (uid == null) return;
 
-    final snap = await _firestore
-        .collection('orders')
-        .where('buyerId', isEqualTo: uid)
-        .orderBy('createdAt', descending: true)
-        .get();
+    _errorMessage = null;
+    notifyListeners();
 
-    _myOrders = snap.docs.map((d) => Order.fromMap(d.id, d.data())).toList();
-    _loaded = true;
+    try {
+      final snap = await _firestore
+          .collection('orders')
+          .where('buyerId', isEqualTo: uid)
+          .orderBy('createdAt', descending: true)
+          .get()
+          .timeout(const Duration(seconds: 12));
+
+      _myOrders = snap.docs.map((d) => Order.fromMap(d.id, d.data())).toList();
+      _loaded = true;
+    } on TimeoutException catch (_) {
+      // Without this, a stalled request left `_loaded` false forever with
+      // no exception ever thrown — the screen would show its loading
+      // skeleton indefinitely with no way to recover or retry.
+      _errorMessage = 'Connection is taking too long. Please check your internet and try again.';
+    } catch (e) {
+      // Previously any Firestore error here (permission issue, missing
+      // composite index, etc.) went uncaught: `_loaded` stayed false
+      // forever and the screen was stuck on its loading skeleton with no
+      // error shown and no way to retry.
+      _errorMessage = e.toString();
+    }
     notifyListeners();
   }
 
@@ -84,6 +105,7 @@ class OrderProvider extends ChangeNotifier {
   void resetSession() {
     _myOrders = [];
     _loaded = false;
+    _errorMessage = null;
     notifyListeners();
   }
 }
