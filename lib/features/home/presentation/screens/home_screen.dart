@@ -528,16 +528,16 @@ class _CategoriesTab extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              mainAxisSpacing: 14,
-              crossAxisSpacing: 14,
-              childAspectRatio: 1.05,
+              crossAxisCount: 4,
+              mainAxisSpacing: 18,
+              crossAxisSpacing: 8,
+              childAspectRatio: 0.78,
             ),
             delegate: SliverChildBuilderDelegate(
               (context, i) {
                 final cat = catalog.categories[i];
                 final count = catalog.productsByCategory(cat.id).length;
-                return _CategoryBigCard(
+                return _CategoryGridTile(
                   label: cat.name(lang),
                   icon: cat.icon,
                   color: cat.color,
@@ -965,7 +965,12 @@ class _CategoryCircle extends StatelessWidget {
 }
 
 /// Bigger tappable category card used on the full Categories tab.
-class _CategoryBigCard extends StatelessWidget {
+/// Clean, dense icon-grid tile for the full Categories page — matches
+/// the layout used by major grocery/shopping apps (large marketplaces):
+/// a colored circular icon with the label and item count underneath,
+/// no card chrome. Visually consistent with the small `_CategoryCircle`
+/// preview used on the Home tab, just sized up for a standalone grid.
+class _CategoryGridTile extends StatelessWidget {
   final String label;
   final IconData icon;
   final Color color;
@@ -973,7 +978,7 @@ class _CategoryBigCard extends StatelessWidget {
   final String itemsLabel;
   final VoidCallback onTap;
 
-  const _CategoryBigCard({
+  const _CategoryGridTile({
     required this.label,
     required this.icon,
     required this.color,
@@ -987,45 +992,45 @@ class _CategoryBigCard extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.line, width: 1),
-        ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 48,
-              height: 48,
+              width: 64,
+              height: 64,
               decoration: BoxDecoration(color: color.withOpacity(0.12), shape: BoxShape.circle),
               child: (imageUrl != null && imageUrl!.isNotEmpty)
                   ? ClipOval(
-                      // Same zoom-crop as the small Home circle — pulls
-                      // the subject out from the middle of whatever
-                      // plain background the source photo was shot on.
+                      // Same zoom-crop as the Home circle — pulls the
+                      // subject out from the middle of whatever plain
+                      // background the source photo was shot on.
                       child: Transform.scale(
                         scale: 1.35,
                         child: Image.network(
                           imageUrl!,
-                          width: 48,
-                          height: 48,
+                          width: 64,
+                          height: 64,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 24),
+                          errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 28),
                         ),
                       ),
                     )
-                  : Icon(icon, color: color, size: 24),
+                  : Icon(icon, color: color, size: 28),
             ),
-            const Spacer(),
-            Text(label,
-                style: AppTextStyles.body(fontSize: 15, fontWeight: FontWeight.w700),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: AppTextStyles.body(fontSize: 12, fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 2),
-            Text(itemsLabel, style: AppTextStyles.caption(fontSize: 12, color: AppColors.mutedDark)),
+            Text(itemsLabel,
+                textAlign: TextAlign.center,
+                style: AppTextStyles.caption(fontSize: 10, color: AppColors.mutedDark)),
           ],
         ),
       ),
