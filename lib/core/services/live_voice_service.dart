@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:record/record.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -40,9 +39,10 @@ class LiveConfirmOrderCall {
 /// the AI is talking, etc.
 enum LiveCallPhase { connecting, listening, aiSpeaking, ended, error }
 
-/// Thrown when no Gemini API key has been saved on this device yet
-/// (see [LiveVoiceService.saveApiKey]) — lets the screen show a clear
-/// "not set up" message instead of a raw socket error.
+/// Thrown when Firestore has no usable Gemini API key configured yet
+/// (e.g. `config/geminiLiveApi.apiKey` is missing or empty) — lets the
+/// screen show a clear "not set up" message instead of a raw socket
+/// error.
 class NoApiKeyConfiguredException implements Exception {
   @override
   String toString() => 'No Gemini API key is configured.';
@@ -57,12 +57,14 @@ class NoApiKeyConfiguredException implements Exception {
 /// one open connection — this is what actually makes it feel like a
 /// phone call.
 ///
-/// The Gemini API key lives only on this device, in encrypted local
-/// storage (flutter_secure_storage) — not in Firestore, not on any
-/// server. Enter it once from the Live Call screen (see
-/// [LiveVoiceService.saveApiKey]); nothing about the key ever leaves
-/// the phone except the direct HTTPS/WebSocket request to Google's own
-/// Gemini API.
+/// Deliberately NOT Firebase AI Logic: that requires the Firebase
+/// project to be on the paid Blaze plan just to open a Live session.
+/// This talks to `generativelanguage.googleapis.com` directly with a
+/// plain Gemini API key — except the key itself lives in a Firestore
+/// document (`config/geminiLiveApi`, field `apiKey`) instead of being
+/// hardcoded in the app or entered by each buyer. That's what lets the
+/// web admin panel swap the key the moment one runs out of quota, with
+/// zero app update needed and nothing for a buyer to set up.
 ///
 /// Ordering works via two tools the model can call whenever the buyer
 /// names something or is ready to check out:
@@ -71,22 +73,7 @@ class NoApiKeyConfiguredException implements Exception {
 ///    the same location-detect + placeOrder flow the old checkout used,
 ///    then report back success/failure with [respondToConfirmOrder].
 class LiveVoiceService {
-  // gemini-2.5-flash-native-audio-preview-12-2025 connects fine (setup
-  // succeeds) but doesn't reliably send audio replies back. DevMate AI
-  // uses this model and it's confirmed working end-to-end for live
-  // voice replies, so matching it here.
-  static const _model = 'gemini-3.1-flash-live-preview';
-  static const _kApiKeyStorageKey = 'gemini_live_api_key';
-  static final _secureStorage = const FlutterSecureStorage();
-
-  // Shared key the admin can set/rotate from the admin panel (e.g. when
-  // the free-tier quota runs out) — lives at settings/geminiConfig in
-  // Firestore. Every buyer reads this by default; a buyer's own
-  // locally-saved key (see saveApiKey) is only used as a fallback if
-  // this doc has no key set, so nothing changes for anyone who already
-  // entered their own key.
-  static const _kSettingsCollection = 'settings';
-  static const _kGeminiConfigDoc = 'geminiConfig';
+  static const _model = 'gemini-2.0-flash-live-001';
 
   WebSocketChannel? _channel;
   StreamSubscription? _wsSub;
@@ -140,9 +127,8 @@ class LiveVoiceService {
   /// language the model should actually speak, matching whatever the
   /// buyer has the app set to.
   ///
-  /// Throws [NoApiKeyConfiguredException] if no key has been saved on
-  /// this device yet — call [saveApiKey] first (or catch this and
-  /// prompt for one).
+  /// Throws [NoApiKeyConfiguredException] if nobody has set an API key
+  /// in the admin panel yet.
   Future<void> start(
     List<Product> products,
     AppStrings strings, {
@@ -151,7 +137,8 @@ class LiveVoiceService {
     _manualDisconnect = false;
     _phaseController.add(LiveCallPhase.connecting);
 
-    final apiKey = await getApiKey();
+    final config = await _fetchConfig();
+    final apiKey = config['apiKey'];
     if (apiKey == null || apiKey.trim().isEmpty) {
       _phaseController.add(LiveCallPhase.error);
       throw NoApiKeyConfiguredException();
@@ -168,44 +155,39 @@ class LiveVoiceService {
       _playerReady = true;
     }
 
-    final systemPrompt = _buildSystemPrompt(products, strings, isHindi: isHindi);
+    final systemPrompt = _buildSystemPrompt(
+      products,
+      strings,
+      isHindi: isHindi,
+      customInstructions: config['instructions'],
+    );
     await _connect(apiKey: apiKey, systemPrompt: systemPrompt);
   }
 
-  /// Resolves the Gemini API key to use for this call: tries the
-  /// shared admin-set key in Firestore first (so rotating a key that
-  /// hit its quota takes effect for everyone immediately, no app
-  /// update needed), then falls back to whatever the buyer saved
-  /// locally on this device. Returns null if neither is set.
-  static Future<String?> getApiKey() async {
+  /// Reads `config/geminiLiveApi` fresh from Firestore every call (not
+  /// cached) so both the key *and* the admin's custom instructions
+  /// always reflect whatever was most recently saved in the admin
+  /// panel, with no app restart needed. Returns `{apiKey, instructions}`
+  /// — either value may be null if unset.
+  Future<Map<String, String?>> _fetchConfig() async {
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection(_kSettingsCollection)
-          .doc(_kGeminiConfigDoc)
-          .get();
-      final remoteKey = doc.data()?['apiKey'] as String?;
-      if (remoteKey != null && remoteKey.trim().isNotEmpty) {
-        return remoteKey.trim();
-      }
+      final doc = await FirebaseFirestore.instance.collection('config').doc('geminiLiveApi').get();
+      final data = doc.data();
+      return {
+        'apiKey': data?['apiKey'] as String?,
+        'instructions': data?['instructions'] as String?,
+      };
     } catch (_) {
-      // Firestore unreachable, doc/rule missing, etc. — fall through
-      // to the buyer's own locally-saved key instead of failing the
-      // call outright.
+      return {'apiKey': null, 'instructions': null};
     }
-    return _secureStorage.read(key: _kApiKeyStorageKey);
   }
 
-  /// Saves the buyer's own Gemini API key locally on this device
-  /// (encrypted, via flutter_secure_storage), used only when no shared
-  /// admin key is set in Firestore. Call this once from a
-  /// settings/setup screen — get a free key at
-  /// https://aistudio.google.com/apikey.
-  static Future<void> saveApiKey(String key) => _secureStorage.write(key: _kApiKeyStorageKey, value: key.trim());
-
-  /// Removes the saved key from this device.
-  static Future<void> clearApiKey() => _secureStorage.delete(key: _kApiKeyStorageKey);
-
-  String _buildSystemPrompt(List<Product> products, AppStrings strings, {required bool isHindi}) {
+  String _buildSystemPrompt(
+    List<Product> products,
+    AppStrings strings, {
+    required bool isHindi,
+    String? customInstructions,
+  }) {
     final catalogLines = products
         .where((p) => p.isActive && p.stock > 0)
         .map((p) =>
@@ -227,6 +209,19 @@ class LiveVoiceService {
         ? 'खरीदार ने हिंदी चुनी है — हमेशा हिंदी में बोलो (हिंग्लिश ठीक है), टूटी-फूटी भाषा में भी मतलब समझो।'
         : 'The buyer has chosen English — always reply in English, plain and conversational.';
 
+    final trimmedExtra = customInstructions?.trim() ?? '';
+    // Kept as its own clearly-labelled block, appended after the core
+    // rules rather than mixed into them, so an admin's wording can
+    // never accidentally override the tool-calling behaviour above —
+    // it can only add to it (tone, extra store info, current offers,
+    // festival greetings, etc.).
+    final extraBlock = trimmedExtra.isEmpty
+        ? ''
+        : '''
+
+Extra instructions from the shop admin — follow these too, on top of everything above:
+$trimmedExtra''';
+
     return '''
 You are GaonHaat's real, sensible voice assistant on a live phone call with a buyer — not a robot reading a script. $languageLine
 
@@ -244,7 +239,7 @@ Tools:
   - status "location_error": their location couldn't be detected — tell them to finish the order from the checkout screen instead.
   - status "failed": something went wrong — apologise briefly and ask them to try again in a moment.
 
-For anything about the app, an order, or a product, answer naturally and helpfully in your own words — vary your phrasing, don't recite a script. Only for things totally unrelated to GaonHaat (cricket, politics, etc.) politely say you can only help with GaonHaat. Keep replies short and conversational, like a real phone call.
+For anything about the app, an order, or a product, answer naturally and helpfully in your own words — vary your phrasing, don't recite a script. Only for things totally unrelated to GaonHaat (cricket, politics, etc.) politely say you can only help with GaonHaat. Keep replies short and conversational, like a real phone call.$extraBlock
 ''';
   }
 
@@ -343,7 +338,6 @@ For anything about the app, an order, or a product, answer naturally and helpful
 
   void _handleSocketClosed() {
     final code = _channel?.closeCode;
-    final reason = _channel?.closeReason;
     _micSub?.cancel();
     _micSub = null;
     _recorder.stop().catchError((_) => null);
@@ -363,8 +357,7 @@ For anything about the app, an order, or a product, answer naturally and helpful
     }
 
     if (!_manualDisconnect) {
-      final reasonText = (reason != null && reason.isNotEmpty) ? ': $reason' : '';
-      onError?.call(unexpected ? 'Call dropped (code: $code)$reasonText' : 'Call ended');
+      onError?.call(unexpected ? 'Call dropped (code: $code)' : 'Call ended');
     }
     _phaseController.add(LiveCallPhase.ended);
   }
@@ -488,6 +481,16 @@ For anything about the app, an order, or a product, answer naturally and helpful
       encoder: AudioEncoder.pcm16bits,
       sampleRate: 16000,
       numChannels: 1,
+      // These three run on-device, before any audio ever leaves the
+      // phone — they clean up the signal at the source instead of
+      // relying only on Gemini's server-side VAD to guess what's
+      // speech and what's a fan/TV/street noise in the background.
+      // echoCancel matters most on speaker calls: without it, the
+      // mic picks the AI's own voice back up off the speaker and the
+      // model reacts to itself as if the buyer just spoke.
+      noiseSuppress: true,
+      echoCancel: true,
+      autoGain: true,
     ));
     _micSub = micStream.listen((chunk) {
       // Mic keeps recording while muted (instant unmute, no restart)
