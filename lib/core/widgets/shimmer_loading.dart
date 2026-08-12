@@ -128,6 +128,29 @@ class CategoryCircleSkeleton extends StatelessWidget {
 
 /// Skeleton for the bigger category card (2x2 thumbnail preview / category
 /// tile) used on the home tab and the categories tab.
+/// Skeleton for a single tile in the full Categories page's icon grid —
+/// mirrors `_CategoryGridTile`'s circle-icon + label shape.
+class CategoryGridTileSkeleton extends StatelessWidget {
+  const CategoryGridTileSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const ShimmerCircle(size: 64),
+          const SizedBox(height: 8),
+          const ShimmerBox(height: 11, width: 48, radius: 4),
+          const SizedBox(height: 4),
+          const ShimmerBox(height: 9, width: 32, radius: 4),
+        ],
+      ),
+    );
+  }
+}
+
 class CategoryCardSkeleton extends StatelessWidget {
   const CategoryCardSkeleton({super.key});
 
@@ -225,7 +248,7 @@ class HomeTabSkeleton extends StatelessWidget {
   }
 }
 
-/// Full skeleton for the categories tab — a 2-column grid of big cards.
+/// Full skeleton for the categories tab — a 4-column icon grid.
 class CategoriesTabSkeleton extends StatelessWidget {
   const CategoriesTabSkeleton({super.key});
 
@@ -249,11 +272,11 @@ class CategoriesTabSkeleton extends StatelessWidget {
             GridView.count(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: 2,
-              mainAxisSpacing: 14,
-              crossAxisSpacing: 14,
-              childAspectRatio: 1.05,
-              children: List.generate(6, (i) => const CategoryCardSkeleton()),
+              crossAxisCount: 4,
+              mainAxisSpacing: 18,
+              crossAxisSpacing: 8,
+              childAspectRatio: 0.78,
+              children: List.generate(12, (i) => const CategoryGridTileSkeleton()),
             ),
           ],
         ),
