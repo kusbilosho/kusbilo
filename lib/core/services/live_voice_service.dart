@@ -88,6 +88,18 @@ class LiveVoiceService {
   int _reconnectAttempts = 0;
   static const _maxReconnectAttempts = 2;
 
+  // While the AI's own audio is playing out of the speaker, mic input
+  // is withheld from the server instead of streamed. On-device echo
+  // cancellation isn't reliable on every phone (especially over the
+  // loudspeaker) — without this, the mic can pick the AI's own voice
+  // back up, the server reads that as the buyer interrupting, and the
+  // call goes silent waiting for a "turn" that never really happened.
+  // This mirrors the walkie-talkie muting a buyer would do by hand,
+  // just automatic. The trade-off is losing true voice barge-in mid
+  // sentence; a real interruption still works via the mute button.
+  bool _suppressMicDuringPlayback = false;
+  Timer? _resumeMicTimer;
+
   // Remembered so a silent reconnect can rebuild the exact same session.
   String? _lastApiKey;
   String? _lastSystemPrompt;
@@ -430,6 +442,8 @@ For anything about the app, an order, or a product, answer naturally and helpful
         final inlineData = (part as Map<String, dynamic>)['inlineData'] as Map<String, dynamic>?;
         if (inlineData != null && inlineData['data'] != null) {
           final bytes = base64Decode(inlineData['data'] as String);
+          _resumeMicTimer?.cancel();
+          _suppressMicDuringPlayback = true;
           _phaseController.add(LiveCallPhase.aiSpeaking);
           if (_playbackSource != null) {
             _player.addAudioDataStream(_playbackSource!, bytes);
@@ -444,6 +458,10 @@ For anything about the app, an order, or a product, answer naturally and helpful
 
     if (serverContent['turnComplete'] == true) {
       _phaseController.add(LiveCallPhase.listening);
+      _resumeMicTimer?.cancel();
+      _resumeMicTimer = Timer(const Duration(milliseconds: 500), () {
+        _suppressMicDuringPlayback = false;
+      });
     }
   }
 
@@ -453,6 +471,8 @@ For anything about the app, an order, or a product, answer naturally and helpful
   /// whatever audio is already buffered, so it actually feels
   /// interrupted rather than talking over them for another second.
   Future<void> _handleBargeIn() async {
+    _resumeMicTimer?.cancel();
+    _suppressMicDuringPlayback = false;
     if (_playbackHandle != null) {
       await _player.stop(_playbackHandle!);
     }
@@ -495,7 +515,9 @@ For anything about the app, an order, or a product, answer naturally and helpful
     _micSub = micStream.listen((chunk) {
       // Mic keeps recording while muted (instant unmute, no restart)
       // but a muted buyer's audio shouldn't reach the model at all.
-      if (_isMuted || _channel == null) return;
+      // Same story while the AI's own voice is playing out loud —
+      // see _suppressMicDuringPlayback above.
+      if (_isMuted || _channel == null || _suppressMicDuringPlayback) return;
       final message = {
         'realtimeInput': {
           'audio': {
@@ -530,6 +552,9 @@ For anything about the app, an order, or a product, answer naturally and helpful
   /// Ends the call — stops the mic, closes the socket, stops playback.
   Future<void> stop() async {
     _manualDisconnect = true;
+    _resumeMicTimer?.cancel();
+    _resumeMicTimer = null;
+    _suppressMicDuringPlayback = false;
     await _micSub?.cancel();
     _micSub = null;
     try {
