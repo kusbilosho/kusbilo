@@ -38,24 +38,18 @@ dependencies:
   package_info_plus: ^8.1.1
 
   # Real-time voice conversation — Gemini Live API over a direct
-  # WebSocket (same protocol DevMate AI uses). The buyer's own Gemini
-  # API key is entered once inside the Live Call sheet and stored only
-  # on-device (flutter_secure_storage, encrypted) — no Firestore, no
-  # admin panel, nothing server-side.
+  # WebSocket (same protocol DevMate AI uses). The API key is set once
+  # in the web admin panel and read from Firestore
+  # (config/geminiLiveApi.apiKey) — buyers never see or enter a key.
   web_socket_channel: ^3.0.1
   record: ^6.2.1
   flutter_soloud: ^3.5.4
-  flutter_secure_storage: ^9.2.2
 
   # Location auto-detect — geolocator reads GPS (free, OS-level),
   # geocoding turns coordinates into a village/district address using
   # the OS's own geocoder (also free, no API key needed).
   geolocator: ^13.0.1
   geocoding: ^3.0.0
-
-  # Shimmer/skeleton loading placeholders used across the app while
-  # content (catalog, orders, etc.) is being fetched.
-  shimmer: ^3.0.0
 
 dev_dependencies:
   flutter_test:
