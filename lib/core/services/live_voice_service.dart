@@ -171,7 +171,7 @@ class LiveVoiceService {
   /// — either value may be null if unset.
   Future<Map<String, String?>> _fetchConfig() async {
     try {
-      final doc = await FirebaseFirestore.instance.collection('config').doc('geminiLiveApi').get();
+      final doc = await FirebaseFirestore.instance.collection('settings').doc('geminiLiveApi').get();
       final data = doc.data();
       return {
         'apiKey': data?['apiKey'] as String?,
