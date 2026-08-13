@@ -52,6 +52,12 @@ dependencies:
   geocoding: ^3.0.0
   shimmer: ^3.0.0
 
+  # UPI payment gateway — calling our own Render-hosted collection
+  # server (see upi-payment-gateway) and generating a unique per-order
+  # ID for it to match against.
+  http: ^1.2.0
+  uuid: ^4.5.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
