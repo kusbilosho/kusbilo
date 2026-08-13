@@ -100,6 +100,13 @@ class LiveVoiceService {
   bool _suppressMicDuringPlayback = false;
   Timer? _resumeMicTimer;
 
+  // If the socket opens fine but Gemini never sends setupComplete back
+  // (a stuck negotiation, not a socket error/close) the call used to sit
+  // on the connecting spinner forever with no way out. This forces an
+  // error after a reasonable wait instead.
+  static const _connectTimeout = Duration(seconds: 15);
+  Timer? _connectTimeoutTimer;
+
   // Remembered so a silent reconnect can rebuild the exact same session.
   String? _lastApiKey;
   String? _lastSystemPrompt;
@@ -167,6 +174,19 @@ class LiveVoiceService {
       _playerReady = true;
     }
 
+    // Playback engine has to be alive and already playing *before* the
+    // socket even opens — not after setupComplete like it used to be.
+    // That old order created a real, silent-failure race: setupComplete
+    // triggered _startMicStreaming() asynchronously and unawaited, which
+    // is what actually built the buffer stream. If Gemini's first audio
+    // chunk arrived before that await finished (easy — Gemini can reply
+    // fast), _playbackSource was still null, the `if (_playbackSource !=
+    // null)` guard quietly skipped it, and the AI's reply was simply
+    // never heard — no error anywhere, connect looked totally fine. This
+    // guarantees the buffer exists ahead of time, no matter how fast the
+    // model answers.
+    await _initPlayback();
+
     final systemPrompt = _buildSystemPrompt(
       products,
       strings,
@@ -174,6 +194,16 @@ class LiveVoiceService {
       customInstructions: config['instructions'],
     );
     await _connect(apiKey: apiKey, systemPrompt: systemPrompt);
+  }
+
+  Future<void> _initPlayback() async {
+    _playbackSource = await _player.setBufferStream(
+      sampleRate: 24000,
+      channels: Channels.mono,
+      format: BufferType.s16le,
+      bufferingType: BufferingType.released,
+    );
+    _playbackHandle = await _player.play(_playbackSource!);
   }
 
   /// Reads `config/geminiLiveApi` fresh from Firestore every call (not
@@ -260,6 +290,14 @@ For anything about the app, an order, or a product, answer naturally and helpful
     _lastSystemPrompt = systemPrompt;
     _setupComplete = false;
 
+    _connectTimeoutTimer?.cancel();
+    _connectTimeoutTimer = Timer(_connectTimeout, () {
+      if (_setupComplete || _manualDisconnect) return;
+      onError?.call('Connection timed out. Check your internet and try again.');
+      _phaseController.add(LiveCallPhase.error);
+      _channel?.sink.close();
+    });
+
     final uri = Uri.parse(
       'wss://generativelanguage.googleapis.com/ws/'
       'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'
@@ -270,6 +308,7 @@ For anything about the app, an order, or a product, answer naturally and helpful
       _channel = WebSocketChannel.connect(uri);
       await _channel!.ready;
     } catch (e) {
+      _connectTimeoutTimer?.cancel();
       _phaseController.add(LiveCallPhase.error);
       onError?.call('Could not connect: $e');
       return;
@@ -390,6 +429,7 @@ For anything about the app, an order, or a product, answer naturally and helpful
     }
 
     if (msg.containsKey('setupComplete')) {
+      _connectTimeoutTimer?.cancel();
       _setupComplete = true;
       _reconnectAttempts = 0;
       _startMicStreaming().catchError((e) {
@@ -489,14 +529,6 @@ For anything about the app, an order, or a product, answer naturally and helpful
   }
 
   Future<void> _startMicStreaming() async {
-    _playbackSource = await _player.setBufferStream(
-      sampleRate: 24000,
-      channels: Channels.mono,
-      format: BufferType.s16le,
-      bufferingType: BufferingType.released,
-    );
-    _playbackHandle = await _player.play(_playbackSource!);
-
     final micStream = await _recorder.startStream(const RecordConfig(
       encoder: AudioEncoder.pcm16bits,
       sampleRate: 16000,
@@ -552,6 +584,8 @@ For anything about the app, an order, or a product, answer naturally and helpful
   /// Ends the call — stops the mic, closes the socket, stops playback.
   Future<void> stop() async {
     _manualDisconnect = true;
+    _connectTimeoutTimer?.cancel();
+    _connectTimeoutTimer = null;
     _resumeMicTimer?.cancel();
     _resumeMicTimer = null;
     _suppressMicDuringPlayback = false;
