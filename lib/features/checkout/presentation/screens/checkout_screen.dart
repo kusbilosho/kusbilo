@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../core/localization/locale_provider.dart';
 import '../../../../core/services/location_service.dart';
+import '../../../../core/services/upi_payment_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/widgets/primary_button.dart';
@@ -11,11 +13,14 @@ import '../../../order/data/models/order_item.dart';
 import '../../../order/presentation/providers/order_provider.dart';
 import '../../../order/presentation/screens/order_success_screen.dart';
 
+enum _PaymentMethod { cod, upi }
+
 /// Reached from the Cart tab's "Checkout" button. Buyer never types an
 /// address by hand — a single button detects GPS location and reverse-
 /// geocodes it, since most people in Gao's target villages can't
-/// reliably fill in a manual address form. Only a working location is
-/// required to place an order; payment is Cash on Delivery for now.
+/// reliably fill in a manual address form. Payment is either Cash on
+/// Delivery, or UPI paid up front through our own collection server
+/// (see UpiPaymentService) — the buyer picks either way.
 class CheckoutScreen extends StatefulWidget {
   const CheckoutScreen({super.key});
 
@@ -27,6 +32,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   DetectedLocation? _location;
   bool _detecting = false;
   String? _errorText;
+  _PaymentMethod _paymentMethod = _PaymentMethod.cod;
+
+  // Only meaningful while _paymentMethod == upi and a payment attempt is
+  // in flight — drives the "opening app / waiting for confirmation"
+  // messaging so the buyer isn't just staring at a spinner with no idea
+  // what's happening (their money may already be mid-transfer).
+  bool _upiInProgress = false;
+  String? _upiStatusText;
 
   Future<void> _detectLocation() async {
     final strings = context.read<LocaleProvider>().strings;
@@ -62,16 +75,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     }
   }
 
-  Future<void> _placeOrder() async {
-    final strings = context.read<LocaleProvider>().strings;
-    if (_location == null) {
-      setState(() => _errorText = strings.addressRequiredError);
-      return;
-    }
-
+  Future<void> _placeOrder({String paymentStatus = 'cod', String? gatewayOrderId}) async {
     final cart = context.read<CartProvider>();
     final catalog = context.read<CatalogProvider>();
     final orderProvider = context.read<OrderProvider>();
+    final strings = context.read<LocaleProvider>().strings;
 
     final items = cart.quantities.entries
         .map((e) => (product: catalog.productById(e.key), qty: e.value))
@@ -91,6 +99,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       deliveryLat: _location!.latitude,
       deliveryLng: _location!.longitude,
       deliveryAddressLabel: _location!.label,
+      paymentMethod: _paymentMethod == _PaymentMethod.upi ? 'upi' : 'cod',
+      paymentStatus: paymentStatus,
+      gatewayOrderId: gatewayOrderId,
     );
 
     if (!mounted) return;
@@ -103,6 +114,66 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => OrderSuccessScreen(order: order)),
     );
+  }
+
+  Future<void> _handlePlaceOrderPressed(int total) async {
+    final strings = context.read<LocaleProvider>().strings;
+    if (_location == null) {
+      setState(() => _errorText = strings.addressRequiredError);
+      return;
+    }
+
+    if (_paymentMethod == _PaymentMethod.cod) {
+      await _placeOrder();
+      return;
+    }
+
+    // UPI path: collect the money first, only place the order once the
+    // webhook has actually confirmed it — an order should never exist
+    // in "confirmed but unpaid" limbo for an online-payment choice.
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    setState(() {
+      _upiInProgress = true;
+      _errorText = null;
+      _upiStatusText = strings.upiPaymentOpeningApp;
+    });
+
+    final payment = await UpiPaymentService.pay(amount: total, userId: uid ?? 'unknown');
+
+    if (!mounted) return;
+
+    if (payment.result == UpiPaymentResult.notConfigured) {
+      setState(() {
+        _upiInProgress = false;
+        _upiStatusText = null;
+        _errorText = strings.upiPaymentNotConfigured;
+      });
+      return;
+    }
+
+    if (payment.result == UpiPaymentResult.failed) {
+      setState(() {
+        _upiInProgress = false;
+        _upiStatusText = null;
+        _errorText = strings.upiPaymentFailed;
+      });
+      return;
+    }
+
+    if (payment.result == UpiPaymentResult.timedOut) {
+      setState(() {
+        _upiInProgress = false;
+        _upiStatusText = null;
+        _errorText = strings.upiPaymentTimedOut;
+      });
+      return;
+    }
+
+    // Success.
+    setState(() => _upiStatusText = strings.upiPaymentSuccess);
+    await _placeOrder(paymentStatus: 'paid', gatewayOrderId: payment.gatewayOrderId);
+    if (!mounted) return;
+    setState(() => _upiInProgress = false);
   }
 
   @override
@@ -173,21 +244,60 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       Text('₹$total', style: AppTextStyles.display(fontSize: 20)),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.sage,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.payments_outlined, size: 18, color: AppColors.green),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text(strings.codNote, style: AppTextStyles.caption(fontSize: 12))),
-                      ],
-                    ),
+                  const SizedBox(height: 24),
+                  Text(strings.paymentMethodSection, style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 10),
+                  _PaymentMethodOption(
+                    icon: Icons.payments_outlined,
+                    title: strings.paymentMethodCod,
+                    subtitle: strings.paymentMethodCodSubtitle,
+                    selected: _paymentMethod == _PaymentMethod.cod,
+                    onTap: _upiInProgress
+                        ? null
+                        : () => setState(() {
+                              _paymentMethod = _PaymentMethod.cod;
+                              _errorText = null;
+                            }),
                   ),
+                  const SizedBox(height: 10),
+                  _PaymentMethodOption(
+                    icon: Icons.qr_code_2,
+                    title: strings.paymentMethodUpi,
+                    subtitle: strings.paymentMethodUpiSubtitle,
+                    selected: _paymentMethod == _PaymentMethod.upi,
+                    onTap: _upiInProgress
+                        ? null
+                        : () => setState(() {
+                              _paymentMethod = _PaymentMethod.upi;
+                              _errorText = null;
+                            }),
+                  ),
+                  if (_upiStatusText != null) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.sage,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          if (_upiInProgress) ...[
+                            const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.green),
+                            ),
+                            const SizedBox(width: 10),
+                          ] else
+                            const Icon(Icons.check_circle, size: 18, color: AppColors.green),
+                          Expanded(
+                            child: Text(_upiStatusText!, style: AppTextStyles.caption(fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -200,12 +310,65 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               child: SafeArea(
                 top: false,
                 child: PrimaryButton(
-                  label: isPlacing ? strings.placingOrder : strings.placeOrderButton,
-                  enabled: !isPlacing && cartItems.isNotEmpty,
+                  label: (isPlacing || _upiInProgress) ? strings.placingOrder : strings.placeOrderButton,
+                  enabled: !isPlacing && !_upiInProgress && cartItems.isNotEmpty,
                   trailingIcon: null,
-                  onPressed: _placeOrder,
+                  onPressed: () => _handlePlaceOrderPressed(total),
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PaymentMethodOption extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  const _PaymentMethodOption({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.sage : Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: selected ? AppColors.green : AppColors.line, width: selected ? 1.5 : 1),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 22, color: selected ? AppColors.green : AppColors.charcoal),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: AppTextStyles.caption(fontSize: 12)),
+                ],
+              ),
+            ),
+            Icon(
+              selected ? Icons.radio_button_checked : Icons.radio_button_off,
+              color: selected ? AppColors.green : AppColors.line,
+              size: 20,
             ),
           ],
         ),
