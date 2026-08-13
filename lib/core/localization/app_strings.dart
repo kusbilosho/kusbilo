@@ -360,6 +360,40 @@ class AppStrings {
       ? 'डिलीवरी पर नकद भुगतान करें (Cash on Delivery)'
       : 'Pay with cash on delivery (COD)';
 
+  String get paymentMethodSection => _isHindi ? 'भुगतान का तरीका' : 'Payment method';
+
+  String get paymentMethodCod => _isHindi ? 'नकद (डिलीवरी पर)' : 'Cash on delivery';
+
+  String get paymentMethodCodSubtitle =>
+      _isHindi ? 'सामान मिलने पर पैसे दें' : 'Pay when your order arrives';
+
+  String get paymentMethodUpi => _isHindi ? 'UPI से अभी भुगतान करें' : 'Pay now with UPI';
+
+  String get paymentMethodUpiSubtitle =>
+      _isHindi ? 'GPay, PhonePe, Paytm आदि' : 'GPay, PhonePe, Paytm, etc.';
+
+  String get upiPaymentOpeningApp =>
+      _isHindi ? 'भुगतान ऐप खोला जा रहा है...' : 'Opening your payment app...';
+
+  String get upiPaymentWaiting =>
+      _isHindi ? 'भुगतान की पुष्टि का इंतज़ार है...' : 'Waiting for payment confirmation...';
+
+  String get upiPaymentSuccess => _isHindi ? 'भुगतान सफल हुआ ✅' : 'Payment successful ✅';
+
+  String get upiPaymentFailed => _isHindi
+      ? 'भुगतान नहीं हो पाया। कृपया दोबारा कोशिश करें या नकद भुगतान चुनें।'
+      : "Payment couldn't go through. Please try again or choose cash on delivery.";
+
+  String get upiPaymentTimedOut => _isHindi
+      ? 'भुगतान की पुष्टि नहीं मिली। अगर पैसे कट गए हैं तो थोड़ी देर बाद फिर देखें, या नकद भुगतान चुनें।'
+      : "Couldn't confirm your payment yet. If money was deducted, check back shortly, or choose cash on delivery instead.";
+
+  String get upiPaymentNotConfigured => _isHindi
+      ? 'UPI भुगतान अभी उपलब्ध नहीं है। कृपया नकद भुगतान चुनें।'
+      : 'UPI payment is not available right now. Please choose cash on delivery.';
+
+  String get upiRetryButton => _isHindi ? 'दोबारा कोशिश करें' : 'Try again';
+
   String get placeOrderButton => _isHindi ? 'ऑर्डर करें' : 'Place order';
 
   String get placingOrder => _isHindi ? 'ऑर्डर किया जा रहा है...' : 'Placing your order...';
