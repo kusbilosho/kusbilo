@@ -565,7 +565,9 @@ class _CategoryDetailScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final strings = context.watch<LocaleProvider>().strings;
     final lang = context.watch<LocaleProvider>().language;
-    final items = context.watch<CatalogProvider>().productsByCategory(category.id);
+    final catalog = context.watch<CatalogProvider>();
+    final items = catalog.productsByCategory(category.id);
+    final isLoading = catalog.isLoading || catalog.status == CatalogStatus.idle;
 
     return Scaffold(
       backgroundColor: AppColors.cream,
@@ -604,7 +606,20 @@ class _CategoryDetailScreen extends StatelessWidget {
             ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
-              sliver: items.isEmpty
+              sliver: isLoading
+                  ? SliverGrid(
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        mainAxisSpacing: 14,
+                        crossAxisSpacing: 14,
+                        childAspectRatio: 0.78,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, i) => const AppShimmer(child: ProductCardSkeleton()),
+                        childCount: 6,
+                      ),
+                    )
+                  : items.isEmpty
                   ? SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.only(top: 40),
