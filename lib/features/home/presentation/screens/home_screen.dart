@@ -22,6 +22,7 @@ import '../../../../core/widgets/static_info_screen.dart';
 import '../../../admin/presentation/providers/admin_provider.dart';
 import '../../../admin/presentation/screens/admin_kyc_queue_screen.dart';
 import '../../../admin/presentation/screens/manage_categories_screen.dart';
+import '../../../admin/presentation/screens/payment_settings_screen.dart';
 import '../../../addresses/presentation/providers/addresses_provider.dart';
 import '../../../addresses/presentation/screens/addresses_screen.dart';
 import '../../../favorites/presentation/providers/favorites_provider.dart';
@@ -1421,6 +1422,9 @@ class _AdminMenuSection extends StatelessWidget {
               _MenuRowData(Icons.category_outlined, 'Manage Categories', AppColors.green,
                   onTap: () => Navigator.of(context)
                       .push(MaterialPageRoute(builder: (_) => const ManageCategoriesScreen()))),
+              _MenuRowData(Icons.account_balance_wallet_outlined, 'Payment Settings', AppColors.green,
+                  onTap: () => Navigator.of(context)
+                      .push(MaterialPageRoute(builder: (_) => const PaymentSettingsScreen()))),
             ],
             strings: strings,
           ),
