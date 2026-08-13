@@ -482,8 +482,8 @@ For anything about the app, an order, or a product, answer naturally and helpful
         final inlineData = (part as Map<String, dynamic>)['inlineData'] as Map<String, dynamic>?;
         if (inlineData != null && inlineData['data'] != null) {
           final bytes = base64Decode(inlineData['data'] as String);
-          _resumeMicTimer?.cancel();
           _suppressMicDuringPlayback = true;
+          _armResumeMicTimer();
           _phaseController.add(LiveCallPhase.aiSpeaking);
           if (_playbackSource != null) {
             _player.addAudioDataStream(_playbackSource!, bytes);
@@ -498,11 +498,25 @@ For anything about the app, an order, or a product, answer naturally and helpful
 
     if (serverContent['turnComplete'] == true) {
       _phaseController.add(LiveCallPhase.listening);
-      _resumeMicTimer?.cancel();
-      _resumeMicTimer = Timer(const Duration(milliseconds: 500), () {
-        _suppressMicDuringPlayback = false;
-      });
+      _armResumeMicTimer();
     }
+  }
+
+  /// (Re)starts the countdown to un-suppress the mic. Called on every
+  /// audio chunk *and* on turnComplete — deliberately not "only on
+  /// turnComplete". A trailing chunk that arrives slightly after
+  /// turnComplete (message reordering, or a model that batches audio +
+  /// transcript in one event) used to permanently strand
+  /// _suppressMicDuringPlayback at true forever, since nothing would
+  /// ever clear it again — the buyer's mic would silently stay dead for
+  /// the rest of the call after exactly one AI reply. Debouncing off of
+  /// "quiet for N ms" instead of a single signal self-heals regardless
+  /// of which event actually arrives last.
+  void _armResumeMicTimer() {
+    _resumeMicTimer?.cancel();
+    _resumeMicTimer = Timer(const Duration(milliseconds: 600), () {
+      _suppressMicDuringPlayback = false;
+    });
   }
 
   /// The buyer started talking over the AI — Google's own barge-in
