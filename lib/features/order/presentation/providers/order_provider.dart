@@ -75,6 +75,9 @@ class OrderProvider extends ChangeNotifier {
     double? deliveryLat,
     double? deliveryLng,
     String? deliveryAddressLabel,
+    String paymentMethod = 'cod',
+    String? paymentStatus,
+    String? gatewayOrderId,
   }) async {
     if (_uid == null || items.isEmpty) return null;
 
@@ -87,10 +90,31 @@ class OrderProvider extends ChangeNotifier {
         'deliveryLat': deliveryLat,
         'deliveryLng': deliveryLng,
         'deliveryAddressLabel': deliveryAddressLabel,
+        'paymentMethod': paymentMethod,
+        'paymentStatus': paymentStatus,
+        'gatewayOrderId': gatewayOrderId,
       });
 
       final data = Map<String, dynamic>.from(result.data as Map);
-      final order = Order.fromMap(data['orderId'] as String, Map<String, dynamic>.from(data['order'] as Map));
+      final orderId = data['orderId'] as String;
+      final order = Order.fromMap(orderId, Map<String, dynamic>.from(data['order'] as Map));
+
+      // Best-effort: the placeOrder Cloud Function may or may not already
+      // persist paymentMethod/paymentStatus itself (we don't control that
+      // code from the app). Writing it here too means payment info shows
+      // up in order history either way. Non-fatal if the security rules
+      // don't allow a buyer to touch their own order doc after creation —
+      // the order itself is already placed successfully at this point.
+      if (paymentMethod != 'cod' || paymentStatus != null) {
+        try {
+          await _firestore.collection('orders').doc(orderId).update({
+            'paymentMethod': paymentMethod,
+            if (paymentStatus != null) 'paymentStatus': paymentStatus,
+            if (gatewayOrderId != null) 'gatewayOrderId': gatewayOrderId,
+          });
+        } catch (_) {}
+      }
+
       _myOrders = [order, ..._myOrders];
       notifyListeners();
       return order;
