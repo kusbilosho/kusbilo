@@ -77,6 +77,9 @@ class Order {
   final AssignmentStatus assignmentStatus;
   final List<String> rejectedMerchantIds;
   final int? etaMinutes;
+  final String paymentMethod;
+  final String? paymentStatus;
+  final String? gatewayOrderId;
 
   const Order({
     required this.id,
@@ -93,6 +96,9 @@ class Order {
     this.assignmentStatus = AssignmentStatus.pendingMerchant,
     this.rejectedMerchantIds = const [],
     this.etaMinutes,
+    this.paymentMethod = 'cod',
+    this.paymentStatus,
+    this.gatewayOrderId,
   });
 
   Map<String, dynamic> toMap() => {
@@ -109,6 +115,9 @@ class Order {
         'assignmentStatus': assignmentStatusToString(assignmentStatus),
         'rejectedMerchantIds': rejectedMerchantIds,
         'etaMinutes': etaMinutes,
+        'paymentMethod': paymentMethod,
+        'paymentStatus': paymentStatus,
+        'gatewayOrderId': gatewayOrderId,
       };
 
   factory Order.fromMap(String id, Map<String, dynamic> map) => Order(
@@ -129,5 +138,8 @@ class Order {
         rejectedMerchantIds:
             (map['rejectedMerchantIds'] as List<dynamic>? ?? []).map((e) => e.toString()).toList(),
         etaMinutes: (map['etaMinutes'] as num?)?.toInt(),
+        paymentMethod: map['paymentMethod'] as String? ?? 'cod',
+        paymentStatus: map['paymentStatus'] as String?,
+        gatewayOrderId: map['gatewayOrderId'] as String?,
       );
 }
