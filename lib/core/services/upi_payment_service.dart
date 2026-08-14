@@ -2,12 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/uuid.dart';
 
 /// Talks to our own UPI collection server (see the separate
-/// upi-payment-gateway repo, deployed on Render) — it generates a
+/// upi-payment-gateway repo, deployed on Netlify) — it generates a
 /// unique-amount UPI deep link per order and confirms payment once a
 /// forwarded bank SMS matches it. The server's base URL is admin-set in
 /// Firestore (`settings/paymentGateway.baseUrl`) so it can be changed
@@ -31,7 +32,8 @@ class UpiPaymentService {
       final url = doc.data()?['baseUrl'] as String?;
       if (url == null || url.trim().isEmpty) return null;
       return url.trim().endsWith('/') ? url.trim().substring(0, url.trim().length - 1) : url.trim();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[UPI] Failed to read settings/paymentGateway from Firestore: $e');
       return null;
     }
   }
@@ -50,8 +52,10 @@ class UpiPaymentService {
   }) async {
     final baseUrl = await _fetchBaseUrl();
     if (baseUrl == null) {
+      debugPrint('[UPI] No baseUrl configured in settings/paymentGateway — check Gaonadmin Payment tab.');
       return (result: UpiPaymentResult.notConfigured, gatewayOrderId: '');
     }
+    debugPrint('[UPI] Using gateway base URL: $baseUrl');
 
     final gatewayOrderId = 'GH${DateTime.now().millisecondsSinceEpoch}${_uuid.v4().substring(0, 6)}';
 
@@ -69,9 +73,12 @@ class UpiPaymentService {
             }),
           )
           .timeout(const Duration(seconds: 15));
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[UPI] initiate-payment request threw: $e');
       return (result: UpiPaymentResult.failed, gatewayOrderId: gatewayOrderId);
     }
+
+    debugPrint('[UPI] initiate-payment -> ${initiateResponse.statusCode}: ${initiateResponse.body}');
 
     if (initiateResponse.statusCode != 200) {
       return (result: UpiPaymentResult.failed, gatewayOrderId: gatewayOrderId);
@@ -80,17 +87,27 @@ class UpiPaymentService {
     Map<String, dynamic> data;
     try {
       data = jsonDecode(initiateResponse.body) as Map<String, dynamic>;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[UPI] Could not parse initiate-payment response as JSON: $e');
       return (result: UpiPaymentResult.failed, gatewayOrderId: gatewayOrderId);
     }
 
     final upiUrl = data['upiUrl'] as String?;
     if (upiUrl == null) {
+      debugPrint('[UPI] Response had no upiUrl field: $data');
       return (result: UpiPaymentResult.failed, gatewayOrderId: gatewayOrderId);
     }
 
-    final launched = await launchUrl(Uri.parse(upiUrl), mode: LaunchMode.externalApplication);
+    debugPrint('[UPI] Launching: $upiUrl');
+    bool launched;
+    try {
+      launched = await launchUrl(Uri.parse(upiUrl), mode: LaunchMode.externalApplication);
+    } catch (e) {
+      debugPrint('[UPI] launchUrl threw: $e');
+      launched = false;
+    }
     if (!launched) {
+      debugPrint('[UPI] launchUrl returned false — no UPI app could handle this link.');
       return (result: UpiPaymentResult.failed, gatewayOrderId: gatewayOrderId);
     }
 
@@ -102,17 +119,20 @@ class UpiPaymentService {
         final statusResponse = await http
             .get(Uri.parse('$baseUrl/api/check-status/$gatewayOrderId'))
             .timeout(const Duration(seconds: 10));
+        debugPrint('[UPI] check-status -> ${statusResponse.statusCode}: ${statusResponse.body}');
         if (statusResponse.statusCode == 200) {
           final statusData = jsonDecode(statusResponse.body) as Map<String, dynamic>;
           if (statusData['status'] == 'SUCCESS') {
             return (result: UpiPaymentResult.success, gatewayOrderId: gatewayOrderId);
           }
         }
-      } catch (_) {
+      } catch (e) {
+        debugPrint('[UPI] check-status poll failed (will retry): $e');
         // A single failed poll (flaky network) shouldn't abandon the
         // whole wait — keep trying until the deadline.
       }
     }
+    debugPrint('[UPI] Gave up waiting for payment confirmation after $_pollTimeout.');
     return (result: UpiPaymentResult.timedOut, gatewayOrderId: gatewayOrderId);
   }
 }
