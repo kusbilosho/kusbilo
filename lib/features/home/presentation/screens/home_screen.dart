@@ -27,6 +27,7 @@ import '../../../addresses/presentation/providers/addresses_provider.dart';
 import '../../../addresses/presentation/screens/addresses_screen.dart';
 import '../../../favorites/presentation/providers/favorites_provider.dart';
 import '../../../favorites/presentation/screens/wishlist_screen.dart';
+import '../../../profile/presentation/providers/user_profile_provider.dart';
 import '../widgets/live_call_sheet.dart';
 import 'product_detail_screen.dart';
 
@@ -72,6 +73,7 @@ class _HomeShellScreenState extends State<HomeShellScreen> with WidgetsBindingOb
     context.read<MerchantProvider>().load();
     context.read<CartProvider>().load();
     context.read<FavoritesProvider>().load();
+    context.read<UserProfileProvider>().load();
   }
 
   @override
@@ -879,13 +881,19 @@ class _SearchBar extends StatelessWidget {
           const Icon(Icons.search_rounded, size: 20, color: AppColors.muted),
           const SizedBox(width: 10),
           Expanded(
-            child: TextField(
-              style: AppTextStyles.body(fontSize: 14),
-              decoration: InputDecoration(
-                isDense: true,
-                border: InputBorder.none,
-                hintText: hint,
-                hintStyle: AppTextStyles.caption(fontSize: 13),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const _SearchScreen())),
+              child: AbsorbPointer(
+                child: TextField(
+                  style: AppTextStyles.body(fontSize: 14),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    hintText: hint,
+                    hintStyle: AppTextStyles.caption(fontSize: 13),
+                  ),
+                ),
               ),
             ),
           ),
@@ -900,6 +908,127 @@ class _SearchBar extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Filters the already-loaded catalog client-side against
+/// [Product.searchableText] (name in both languages, tags, description)
+/// as the buyer types — there's no separate search index or backend
+/// call, since the whole catalog is small enough to already be in
+/// memory from [CatalogProvider] by the time this screen opens.
+class _SearchScreen extends StatefulWidget {
+  const _SearchScreen();
+
+  @override
+  State<_SearchScreen> createState() => _SearchScreenState();
+}
+
+class _SearchScreenState extends State<_SearchScreen> {
+  final _controller = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = context.watch<LocaleProvider>().strings;
+    final lang = context.watch<LocaleProvider>().language;
+    final catalog = context.watch<CatalogProvider>();
+    final q = _query.trim().toLowerCase();
+    final results = q.isEmpty ? <Product>[] : catalog.products.where((p) => p.searchableText.contains(q)).toList();
+
+    return Scaffold(
+      backgroundColor: AppColors.cream,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 20, 8),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: AppColors.charcoal),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: AppColors.line, width: 1.5),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.search_rounded, size: 20, color: AppColors.muted),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: TextField(
+                              controller: _controller,
+                              autofocus: true,
+                              style: AppTextStyles.body(fontSize: 14),
+                              decoration: InputDecoration(
+                                isDense: true,
+                                border: InputBorder.none,
+                                hintText: strings.searchHint,
+                                hintStyle: AppTextStyles.caption(fontSize: 13),
+                              ),
+                              onChanged: (v) => setState(() => _query = v),
+                            ),
+                          ),
+                          if (_controller.text.isNotEmpty)
+                            GestureDetector(
+                              onTap: () => setState(() {
+                                _controller.clear();
+                                _query = '';
+                              }),
+                              child: const Icon(Icons.close, size: 18, color: AppColors.muted),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: q.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(strings.searchPromptMessage,
+                            textAlign: TextAlign.center, style: AppTextStyles.caption(fontSize: 13)),
+                      ),
+                    )
+                  : results.isEmpty
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text(strings.searchNoResultsMessage,
+                                textAlign: TextAlign.center, style: AppTextStyles.caption(fontSize: 13)),
+                          ),
+                        )
+                      : GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2,
+                            mainAxisSpacing: 14,
+                            crossAxisSpacing: 14,
+                            childAspectRatio: 0.78,
+                          ),
+                          itemCount: results.length,
+                          itemBuilder: (context, i) =>
+                              _ProductCard(product: results[i], lang: lang, addLabel: strings.addToCart),
+                        ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1195,6 +1324,7 @@ class _ProfileTab extends StatelessWidget {
     final strings = context.watch<LocaleProvider>().strings;
     final phone = FirebaseAuth.instance.currentUser?.phoneNumber ?? '';
     final kycStatus = context.watch<MerchantProvider>().status;
+    final savedName = context.watch<UserProfileProvider>().name;
 
     String sellerSubtitle;
     switch (kycStatus) {
@@ -1230,7 +1360,11 @@ class _ProfileTab extends StatelessWidget {
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
           sliver: SliverToBoxAdapter(
-            child: _ProfileHeaderCard(name: strings.profileGuestName, phone: phone),
+            child: _ProfileHeaderCard(
+              name: (savedName != null && savedName.trim().isNotEmpty) ? savedName : strings.profileGuestName,
+              phone: phone,
+              onEditTap: () => _showEditNameDialog(context, strings, savedName),
+            ),
           ),
         ),
         SliverPadding(
@@ -1365,6 +1499,46 @@ class _ProfileTab extends StatelessWidget {
     );
   }
 
+  void _showEditNameDialog(BuildContext context, AppStrings strings, String? currentName) {
+    final controller = TextEditingController(text: currentName ?? '');
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(strings.editNameTitle),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: AppTextStyles.body(fontSize: 15),
+          decoration: InputDecoration(
+            hintText: strings.editNameHint,
+            filled: true,
+            fillColor: AppColors.cream,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(strings.cancel),
+          ),
+          TextButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                context.read<UserProfileProvider>().updateName(name);
+              }
+              Navigator.of(dialogContext).pop();
+            },
+            child: Text(strings.saveButton, style: const TextStyle(color: AppColors.green, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _confirmLogout(BuildContext context, AppStrings strings) {
     showDialog(
       context: context,
@@ -1384,6 +1558,7 @@ class _ProfileTab extends StatelessWidget {
               context.read<CartProvider>().resetSession();
               context.read<FavoritesProvider>().resetSession();
               context.read<AddressesProvider>().resetSession();
+              context.read<UserProfileProvider>().resetSession();
               await FirebaseAuth.instance.signOut();
               // AuthGate (in main.dart) listens to authStateChanges and will
               // automatically swap back to PhoneLoginScreen once signed out.
@@ -1437,7 +1612,8 @@ class _AdminMenuSection extends StatelessWidget {
 class _ProfileHeaderCard extends StatelessWidget {
   final String name;
   final String phone;
-  const _ProfileHeaderCard({required this.name, required this.phone});
+  final VoidCallback onEditTap;
+  const _ProfileHeaderCard({required this.name, required this.phone, required this.onEditTap});
 
   @override
   Widget build(BuildContext context) {
@@ -1467,11 +1643,14 @@ class _ProfileHeaderCard extends StatelessWidget {
               ],
             ),
           ),
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(color: AppColors.sage, borderRadius: BorderRadius.circular(10)),
-            child: const Icon(Icons.edit_rounded, size: 16, color: AppColors.green),
+          GestureDetector(
+            onTap: onEditTap,
+            child: Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(color: AppColors.sage, borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.edit_rounded, size: 16, color: AppColors.green),
+            ),
           ),
         ],
       ),
