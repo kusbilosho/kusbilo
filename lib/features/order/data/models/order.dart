@@ -142,4 +142,24 @@ class Order {
         paymentStatus: map['paymentStatus'] as String?,
         gatewayOrderId: map['gatewayOrderId'] as String?,
       );
+
+  Order copyWith({OrderStatus? status}) => Order(
+        id: id,
+        buyerId: buyerId,
+        items: items,
+        totalValue: totalValue,
+        status: status ?? this.status,
+        createdAt: createdAt,
+        deliveryLat: deliveryLat,
+        deliveryLng: deliveryLng,
+        deliveryAddressLabel: deliveryAddressLabel,
+        assignedMerchantId: assignedMerchantId,
+        assignedMerchantName: assignedMerchantName,
+        assignmentStatus: assignmentStatus,
+        rejectedMerchantIds: rejectedMerchantIds,
+        etaMinutes: etaMinutes,
+        paymentMethod: paymentMethod,
+        paymentStatus: paymentStatus,
+        gatewayOrderId: gatewayOrderId,
+      );
 }
