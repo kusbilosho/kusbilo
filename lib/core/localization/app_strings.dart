@@ -396,6 +396,59 @@ class AppStrings {
 
   String get placeOrderButton => _isHindi ? 'ऑर्डर करें' : 'Place order';
 
+  String get searchPromptMessage =>
+      _isHindi ? 'सब्ज़ी, फल, अनाज या कुछ भी टाइप करें' : 'Type a vegetable, fruit, grain, or anything else';
+
+  String get searchNoResultsMessage =>
+      _isHindi ? 'कुछ नहीं मिला। कुछ और खोजने की कोशिश करें।' : "Nothing found. Try searching something else.";
+
+  String get cancelOrderButton => _isHindi ? 'ऑर्डर रद्द करें' : 'Cancel order';
+
+  String get cancelOrderConfirmTitle => _isHindi ? 'ऑर्डर रद्द करें?' : 'Cancel this order?';
+
+  String get cancelOrderConfirmBody => _isHindi
+      ? 'क्या आप वाकई इस ऑर्डर को रद्द करना चाहते हैं? यह वापस नहीं हो सकता।'
+      : "Are you sure you want to cancel this order? This can't be undone.";
+
+  String get cancelOrderKeepButton => _isHindi ? 'नहीं, रहने दें' : 'No, keep it';
+
+  String get cancelOrderConfirmButton => _isHindi ? 'हाँ, रद्द करें' : 'Yes, cancel';
+
+  String get cancelOrderSuccessMessage => _isHindi ? 'ऑर्डर रद्द हो गया' : 'Order cancelled';
+
+  String get cancelOrderFailedMessage =>
+      _isHindi ? 'ऑर्डर रद्द नहीं हो पाया। फिर कोशिश करें।' : "Couldn't cancel the order. Please try again.";
+
+  String get editNameTitle => _isHindi ? 'अपना नाम बदलें' : 'Edit your name';
+
+  String get editNameHint => _isHindi ? 'अपना नाम लिखें' : 'Enter your name';
+
+  String get reorderButton => _isHindi ? 'फिर से मंगाएं' : 'Reorder';
+
+  String reorderAllAddedMessage(int count) => _isHindi
+      ? '$count चीज़ें कार्ट में जोड़ दी गईं'
+      : '$count item${count == 1 ? '' : 's'} added to cart';
+
+  String reorderPartiallyAddedMessage(int added, int skipped) => _isHindi
+      ? '$added चीज़ें कार्ट में जोड़ी गईं। $skipped चीज़ें अब उपलब्ध नहीं हैं।'
+      : '$added item${added == 1 ? '' : 's'} added to cart. $skipped item${skipped == 1 ? '' : 's'} no longer available.';
+
+  String get rateOrderTitle => _isHindi ? 'रेटिंग दें' : 'Rate your order';
+
+  String get submitReviewButton => _isHindi ? 'जमा करें' : 'Submit';
+
+  String get reviewSubmittedMessage => _isHindi ? 'धन्यवाद! आपकी रेटिंग जमा हो गई' : 'Thanks! Your rating was saved';
+
+  String get reviewSubmitFailedMessage =>
+      _isHindi ? 'रेटिंग जमा नहीं हो पाई। फिर कोशिश करें।' : "Couldn't save your rating. Please try again.";
+
+  String get rateOrderButton => _isHindi ? 'रेटिंग दें' : 'Rate & review';
+
+  String get noReviewsYetMessage => _isHindi ? 'अभी तक कोई रेटिंग नहीं' : 'No ratings yet';
+
+  String reviewCountLabel(int count) =>
+      _isHindi ? '($count रेटिंग)' : '($count rating${count == 1 ? '' : 's'})';
+
   String get placingOrder => _isHindi ? 'ऑर्डर किया जा रहा है...' : 'Placing your order...';
 
   String get addressRequiredError =>
