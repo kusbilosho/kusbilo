@@ -9,16 +9,13 @@ import '../../../cart/presentation/providers/cart_provider.dart';
 import '../../../favorites/presentation/providers/favorites_provider.dart';
 import '../../data/catalog_provider.dart';
 import '../../data/models/product.dart';
+import '../../data/models/review.dart';
 
 /// Full product page — big photo, description, tags, who's selling it,
-/// a quantity control, and a "similar products" strip from the same
-/// category. Reached by tapping any product card anywhere in the app.
-///
-/// Deliberately no ratings/reviews section yet: there's no review data
-/// model in this app at all today (no one can leave one), so showing an
-/// empty or fake reviews area would be worse than not having the
-/// section — this is flagged as a clear post-launch addition, not
-/// something to fake for v1.
+/// a quantity control, a ratings/reviews section fed by buyers who
+/// bought this from a delivered order (see RateOrderScreen), and a
+/// "similar products" strip from the same category. Reached by tapping
+/// any product card anywhere in the app.
 class ProductDetailScreen extends StatelessWidget {
   final Product product;
   const ProductDetailScreen({super.key, required this.product});
@@ -129,6 +126,8 @@ class ProductDetailScreen extends StatelessWidget {
                           ),
                         ),
                 ),
+                const SizedBox(height: 28),
+                _ReviewsSection(productId: product.id, strings: strings),
                 if (similar.isNotEmpty) ...[
                   const SizedBox(height: 32),
                   Text(strings.similarProductsTitle, style: AppTextStyles.display(fontSize: 16)),
@@ -149,6 +148,103 @@ class ProductDetailScreen extends StatelessWidget {
               ]),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReviewsSection extends StatelessWidget {
+  final String productId;
+  final AppStrings strings;
+  const _ReviewsSection({required this.productId, required this.strings});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('products')
+          .doc(productId)
+          .collection('reviews')
+          .orderBy('createdAt', descending: true)
+          .limit(20)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const SizedBox(height: 40, child: Center(child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.green)));
+        }
+        final reviews = snapshot.data!.docs.map((d) => Review.fromMap(d.data())).toList();
+
+        Widget summary;
+        if (reviews.isEmpty) {
+          summary = Text(strings.noReviewsYetMessage, style: AppTextStyles.caption(fontSize: 13));
+        } else {
+          final avg = reviews.map((r) => r.rating).reduce((a, b) => a + b) / reviews.length;
+          summary = Row(
+            children: [
+              ...List.generate(5, (i) {
+                final filled = i < avg.round();
+                return Icon(filled ? Icons.star_rounded : Icons.star_border_rounded,
+                    color: AppColors.mustard, size: 20);
+              }),
+              const SizedBox(width: 8),
+              Text(avg.toStringAsFixed(1), style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w700)),
+              const SizedBox(width: 4),
+              Text(strings.reviewCountLabel(reviews.length), style: AppTextStyles.caption(fontSize: 12)),
+            ],
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            summary,
+            if (reviews.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              for (final review in reviews.take(5)) ...[
+                _ReviewTile(review: review),
+                const SizedBox(height: 10),
+              ],
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ReviewTile extends StatelessWidget {
+  final Review review;
+  const _ReviewTile({required this.review});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.sage,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              ...List.generate(5, (i) {
+                final filled = i < review.rating;
+                return Icon(filled ? Icons.star_rounded : Icons.star_border_rounded,
+                    color: AppColors.mustard, size: 14);
+              }),
+              if (review.buyerName.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                Text(review.buyerName, style: AppTextStyles.caption(fontSize: 12, fontWeight: FontWeight.w700)),
+              ],
+            ],
+          ),
+          if (review.comment.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(review.comment, style: AppTextStyles.body(fontSize: 13)),
+          ],
         ],
       ),
     );
