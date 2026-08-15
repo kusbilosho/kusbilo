@@ -11,6 +11,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/widgets/shimmer_loading.dart';
 import '../../data/models/order.dart';
+import '../providers/order_provider.dart';
 
 /// Live tracking for a single order — status timeline + ETA countdown up
 /// top (like any e-commerce app's "order placed / confirmed / out for
@@ -61,6 +62,11 @@ class OrderTrackingScreen extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                   child: _OrderSummaryCard(order: order, strings: strings),
                 ),
+                if (order.status == OrderStatus.placed || order.status == OrderStatus.confirmed)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                    child: _CancelOrderButton(order: order, strings: strings),
+                  ),
                 const SizedBox(height: 16),
                 if (order.status == OrderStatus.outForDelivery && hasDeliveryPoint)
                   Padding(
@@ -87,6 +93,69 @@ class OrderTrackingScreen extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _CancelOrderButton extends StatefulWidget {
+  final Order order;
+  final AppStrings strings;
+  const _CancelOrderButton({required this.order, required this.strings});
+
+  @override
+  State<_CancelOrderButton> createState() => _CancelOrderButtonState();
+}
+
+class _CancelOrderButtonState extends State<_CancelOrderButton> {
+  bool _cancelling = false;
+
+  Future<void> _confirmAndCancel() async {
+    final strings = widget.strings;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(strings.cancelOrderConfirmTitle),
+        content: Text(strings.cancelOrderConfirmBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(strings.cancelOrderKeepButton),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(strings.cancelOrderConfirmButton, style: const TextStyle(color: Color(0xFFC0453B))),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _cancelling = true);
+    final ok = await context.read<OrderProvider>().cancelOrder(widget.order.id);
+    if (!mounted) return;
+    setState(() => _cancelling = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(ok ? strings.cancelOrderSuccessMessage : strings.cancelOrderFailedMessage)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton(
+        onPressed: _cancelling ? null : _confirmAndCancel,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: const Color(0xFFC0453B),
+          side: const BorderSide(color: Color(0xFFC0453B)),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        child: _cancelling
+            ? const SizedBox(
+                width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFC0453B)))
+            : Text(widget.strings.cancelOrderButton, style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
     );
   }
