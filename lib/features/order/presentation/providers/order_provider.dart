@@ -126,6 +126,34 @@ class OrderProvider extends ChangeNotifier {
     }
   }
 
+  /// Cancels an order the buyer placed. A direct Firestore write, not a
+  /// Cloud Function call — there's no `cancelOrder` function in
+  /// functions/index.js to call (only `placeOrder` was visible when this
+  /// was written). This means it needs a Firestore rule that lets a
+  /// signed-in buyer set their OWN order's status to 'cancelled', e.g.:
+  ///
+  ///   allow update: if request.auth.uid == resource.data.buyerId
+  ///     && request.resource.data.status == 'cancelled'
+  ///     && resource.data.status in ['placed', 'confirmed'];
+  ///
+  /// The UI already only offers this while status is placed/confirmed
+  /// (see order_tracking_screen.dart), but the rule should enforce that
+  /// server-side too rather than trusting the client.
+  Future<bool> cancelOrder(String orderId) async {
+    try {
+      await _firestore.collection('orders').doc(orderId).update({'status': 'cancelled'});
+      final index = _myOrders.indexWhere((o) => o.id == orderId);
+      if (index != -1) {
+        _myOrders = List.of(_myOrders)..[index] = _myOrders[index].copyWith(status: OrderStatus.cancelled);
+        notifyListeners();
+      }
+      return true;
+    } catch (e) {
+      debugPrint('[OrderProvider] cancelOrder failed: $e');
+      return false;
+    }
+  }
+
   void resetSession() {
     _myOrders = [];
     _loaded = false;
