@@ -19,6 +19,7 @@ import 'features/merchant/presentation/providers/merchant_provider.dart';
 import 'features/merchant/presentation/providers/seller_orders_provider.dart';
 import 'features/merchant/presentation/providers/seller_products_provider.dart';
 import 'features/order/presentation/providers/order_provider.dart';
+import 'features/profile/presentation/providers/user_profile_provider.dart';
 import 'firebase_options.dart';
 
 void main() async {
@@ -59,6 +60,7 @@ class GaonHaatApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AdminProvider()),
         ChangeNotifierProvider(create: (_) => FavoritesProvider()),
         ChangeNotifierProvider(create: (_) => AddressesProvider()),
+        ChangeNotifierProvider(create: (_) => UserProfileProvider()),
       ],
       child: MaterialApp(
         title: 'GaonHaat',
