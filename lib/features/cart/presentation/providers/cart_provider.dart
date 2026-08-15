@@ -54,6 +54,17 @@ class CartProvider extends ChangeNotifier {
     _persist();
   }
 
+  /// Adds [qty] units in one go — used by "reorder from history" so
+  /// restoring a past order's line items is a single persisted write
+  /// instead of calling [add] in a loop (which would round-trip to
+  /// Firestore once per unit).
+  void addQuantity(String productId, int qty) {
+    if (qty <= 0) return;
+    _quantities[productId] = (_quantities[productId] ?? 0) + qty;
+    notifyListeners();
+    _persist();
+  }
+
   void increment(String productId) {
     _quantities[productId] = (_quantities[productId] ?? 0) + 1;
     notifyListeners();
