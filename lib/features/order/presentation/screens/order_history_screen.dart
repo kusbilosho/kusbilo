@@ -5,9 +5,12 @@ import '../../../../core/localization/locale_provider.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/widgets/shimmer_loading.dart';
+import '../../../cart/presentation/providers/cart_provider.dart';
+import '../../../home/data/catalog_provider.dart';
 import '../../data/models/order.dart';
 import '../providers/order_provider.dart';
 import 'order_tracking_screen.dart';
+import 'rate_order_screen.dart';
 
 /// Reached from Profile → "मेरे ऑर्डर". Loads once on mount; pull down
 /// to refresh picks up status changes a seller made in the meantime
@@ -157,6 +160,32 @@ class _OrderCard extends StatelessWidget {
   final Order order;
   final AppStrings strings;
   const _OrderCard({required this.order, required this.strings});
+
+  Future<void> _reorder(BuildContext context) async {
+    final catalog = context.read<CatalogProvider>();
+    final cart = context.read<CartProvider>();
+
+    var addedCount = 0;
+    var skippedCount = 0;
+    for (final item in order.items) {
+      final product = catalog.productById(item.productId);
+      // Only re-add items that are still listed and in stock — a
+      // product pulled by its seller (or sold out) since this order
+      // shouldn't silently reappear in the cart with no way to buy it.
+      if (product != null && product.isActive && product.stock > 0) {
+        cart.addQuantity(item.productId, item.quantity);
+        addedCount++;
+      } else {
+        skippedCount++;
+      }
+    }
+
+    if (!context.mounted) return;
+    final message = skippedCount == 0
+        ? strings.reorderAllAddedMessage(addedCount)
+        : strings.reorderPartiallyAddedMessage(addedCount, skippedCount);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
 
   String _statusLabel(OrderStatus status) => switch (status) {
         OrderStatus.placed => strings.orderStatusPlaced,
@@ -330,6 +359,42 @@ class _OrderCard extends StatelessWidget {
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: AppColors.green),
                         foregroundColor: AppColors.green,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                ],
+                if (order.status == OrderStatus.delivered || order.status == OrderStatus.cancelled) ...[
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _reorder(context),
+                      icon: const Icon(Icons.replay_rounded, size: 16),
+                      label: Text(strings.reorderButton),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: AppColors.green),
+                        foregroundColor: AppColors.green,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                ],
+                if (order.status == OrderStatus.delivered) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => RateOrderScreen(order: order)),
+                      ),
+                      icon: const Icon(Icons.star_border_rounded, size: 16),
+                      label: Text(strings.rateOrderButton),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: AppColors.mustard),
+                        foregroundColor: AppColors.mustard,
                         padding: const EdgeInsets.symmetric(vertical: 10),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       ),
