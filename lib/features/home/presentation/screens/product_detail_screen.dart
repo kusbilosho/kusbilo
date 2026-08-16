@@ -170,6 +170,15 @@ class _ReviewsSection extends StatelessWidget {
           .limit(20)
           .snapshots(),
       builder: (context, snapshot) {
+        // A permission-denied (or any other) stream error used to leave
+        // this stuck on the loading spinner forever — snapshot.hasData
+        // never becomes true, but nothing ever checked hasError either.
+        // Treating an error the same as "no reviews yet" at least lets
+        // the rest of the page render normally instead of an endless
+        // spin with no way to tell what's wrong from the UI alone.
+        if (snapshot.hasError) {
+          return Text(strings.noReviewsYetMessage, style: AppTextStyles.caption(fontSize: 13));
+        }
         if (!snapshot.hasData) {
           return const SizedBox(height: 40, child: Center(child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.green)));
         }
