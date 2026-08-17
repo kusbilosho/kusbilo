@@ -232,8 +232,17 @@ class LiveVoiceService {
   }) {
     final catalogLines = products
         .where((p) => p.isActive && p.stock > 0)
-        .map((p) =>
-            '${p.id} | ${p.nameHi} / ${p.nameEn} | ₹${p.priceValue}${p.unit} | tags: ${p.tags.join(', ')} | ${p.description}')
+        .map((p) {
+          // Every extra token here is context Gemini re-considers on
+          // every single turn for the whole call — a handful of
+          // sellers writing paragraph-length descriptions could quietly
+          // turn into a multi-thousand-token system prompt and add
+          // real, felt latency to every reply. Tags matter more than
+          // prose for voice-search matching anyway, so the description
+          // is just a light supplement, not the main signal.
+          final desc = p.description.length > 120 ? '${p.description.substring(0, 120)}…' : p.description;
+          return '${p.id} | ${p.nameHi} / ${p.nameEn} | ₹${p.priceValue}${p.unit} | tags: ${p.tags.join(', ')} | $desc';
+        })
         .join('\n');
 
     final appFaq = '''
@@ -324,6 +333,11 @@ For anything about the app, an order, or a product, answer naturally and helpful
               'prebuiltVoiceConfig': {'voiceName': 'Kore'},
             },
           },
+          // Explicitly pinned even though 'minimal' is already this
+          // model's default — this is the fastest setting Gemini 3.1
+          // offers, and pinning it means a future default change on
+          // Google's side can never silently slow the call down.
+          'thinkingConfig': {'thinkingLevel': 'minimal'},
         },
         'systemInstruction': {
           'parts': [
@@ -363,13 +377,18 @@ For anything about the app, an order, or a product, answer naturally and helpful
         // Tunes how Gemini decides when you've started/stopped talking —
         // LOW sensitivity behaves more like a real call: it won't flinch
         // at background noise, but still responds promptly on a pause.
+        // silenceDurationMs is the main lever on "how fast does it
+        // respond" — every ms here is a flat delay added to *every*
+        // single turn before the model even starts generating a reply.
+        // 300ms is short enough to feel snappy without cutting the
+        // buyer off mid-sentence during a normal breathing pause.
         'realtimeInputConfig': {
           'automaticActivityDetection': {
             'disabled': false,
             'startOfSpeechSensitivity': 'START_SENSITIVITY_LOW',
             'endOfSpeechSensitivity': 'END_SENSITIVITY_LOW',
-            'prefixPaddingMs': 200,
-            'silenceDurationMs': 500,
+            'prefixPaddingMs': 100,
+            'silenceDurationMs': 300,
           },
           'activityHandling': 'START_OF_ACTIVITY_INTERRUPTS',
         },
@@ -512,9 +531,16 @@ For anything about the app, an order, or a product, answer naturally and helpful
   /// the rest of the call after exactly one AI reply. Debouncing off of
   /// "quiet for N ms" instead of a single signal self-heals regardless
   /// of which event actually arrives last.
+  ///
+  /// 200ms, not 600ms — every extra millisecond here is dead air where
+  /// the buyer can be talking and nothing reaches the server, forcing
+  /// them to repeat themselves. This is the single biggest lever on how
+  /// "slow" the call feels, since it fires on *every* turn. 200ms is
+  /// enough to swallow a genuinely trailing echo tail without eating
+  /// into the buyer's next sentence.
   void _armResumeMicTimer() {
     _resumeMicTimer?.cancel();
-    _resumeMicTimer = Timer(const Duration(milliseconds: 600), () {
+    _resumeMicTimer = Timer(const Duration(milliseconds: 200), () {
       _suppressMicDuringPlayback = false;
     });
   }
