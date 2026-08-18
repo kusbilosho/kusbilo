@@ -88,17 +88,19 @@ class LiveVoiceService {
   int _reconnectAttempts = 0;
   static const _maxReconnectAttempts = 2;
 
-  // While the AI's own audio is playing out of the speaker, mic input
-  // is withheld from the server instead of streamed. On-device echo
-  // cancellation isn't reliable on every phone (especially over the
-  // loudspeaker) — without this, the mic can pick the AI's own voice
-  // back up, the server reads that as the buyer interrupting, and the
-  // call goes silent waiting for a "turn" that never really happened.
-  // This mirrors the walkie-talkie muting a buyer would do by hand,
-  // just automatic. The trade-off is losing true voice barge-in mid
-  // sentence; a real interruption still works via the mute button.
-  bool _suppressMicDuringPlayback = false;
-  Timer? _resumeMicTimer;
+  // Mic streams continuously, even while the AI is talking — that's
+  // what makes it feel like a real call instead of a walkie-talkie.
+  // Barge-in relies on two layers: on-device echoCancel (set on the
+  // recorder below) stops the AI's own voice from being picked back
+  // up off the speaker, and Gemini's own server-side VAD reports
+  // `interrupted: true` the moment it hears the buyer actually
+  // talking, which _handleBargeIn() uses to cut AI playback instantly.
+  // NOTE: on a phone with weak echo cancellation over loudspeaker,
+  // this can occasionally make the AI hear its own voice as an
+  // interruption. If that turns out to be a real problem for buyers,
+  // the fix is prompting a headset/earpiece, not muting the mic —
+  // muting it is what caused the multi-second "recorded but never
+  // arrives" gaps.
 
   // If the socket opens fine but Gemini never sends setupComplete back
   // (a stuck negotiation, not a socket error/close) the call used to sit
@@ -110,6 +112,15 @@ class LiveVoiceService {
   // Remembered so a silent reconnect can rebuild the exact same session.
   String? _lastApiKey;
   String? _lastSystemPrompt;
+
+  // Gemini Live sessions die every ~10 minutes no matter what — that's
+  // a hard platform limit, not something any client-side fix can avoid.
+  // sessionResumption is Google's own answer to it: the server hands
+  // us a handle we can replay on the *next* connection to restore full
+  // conversation context (cart items discussed, what's already been
+  // said) instead of the buyer sounding like they're talking to a
+  // stranger who forgot everything the moment the socket reopens.
+  String? _sessionResumeHandle;
 
   /// Called whenever the model asks to add something to the cart.
   void Function(LiveOrderCall call)? onOrderCall;
@@ -385,6 +396,24 @@ For anything about the app, an order, or a product, answer naturally and helpful
           },
           'activityHandling': 'START_OF_ACTIVITY_INTERRUPTS',
         },
+        // Enables the server to hand us SessionResumptionUpdate
+        // messages. Passing the last handle we were given makes THIS
+        // connection continue the previous one's memory instead of
+        // starting blank — omit `handle` on the very first connect of
+        // a call (nothing to resume yet), always include it after.
+        'sessionResumption': _sessionResumeHandle != null
+            ? {'handle': _sessionResumeHandle}
+            : <String, dynamic>{},
+        // Without this, an audio-only session is hard-capped at 15
+        // minutes of conversation total (token limit), full stop, no
+        // resumption trick gets around it. This lets Gemini quietly
+        // summarize/compress older turns once the context grows past
+        // triggerTokens, instead of the call just dying mid-order once
+        // the buyer's been chatting for a while.
+        'contextWindowCompression': {
+          'triggerTokens': '10000',
+          'slidingWindow': {'targetTokens': '2000'},
+        },
       },
     };
     _channel!.sink.add(jsonEncode(setupMessage));
@@ -400,6 +429,11 @@ For anything about the app, an order, or a product, answer naturally and helpful
   }
 
   void _handleSocketClosed() {
+    // A goAway swap already tore this subscription down deliberately
+    // via _reconnectForContinuity — skip the generic drop-handling
+    // below entirely so it doesn't show "Call ended" or double-connect.
+    if (_swappingForContinuity) return;
+
     final code = _channel?.closeCode;
     _micSub?.cancel();
     _micSub = null;
@@ -425,6 +459,33 @@ For anything about the app, an order, or a product, answer naturally and helpful
     _phaseController.add(LiveCallPhase.ended);
   }
 
+  /// Proactively swaps to a brand new connection when Gemini's `goAway`
+  /// warns the current one is about to be force-closed. Cancels the old
+  /// socket's own listener first so [_handleSocketClosed] never fires
+  /// for it — this is a deliberate, planned swap, not a drop, so none
+  /// of that method's "unexpected disconnect" handling should run.
+  bool _swappingForContinuity = false;
+  Future<void> _reconnectForContinuity() async {
+    if (_manualDisconnect || _swappingForContinuity) return;
+    final key = _lastApiKey;
+    final prompt = _lastSystemPrompt;
+    if (key == null || prompt == null) return;
+
+    _swappingForContinuity = true;
+    await _micSub?.cancel();
+    _micSub = null;
+    await _wsSub?.cancel();
+    _wsSub = null;
+    await _channel?.sink.close(1000);
+    _channel = null;
+    try {
+      await _recorder.stop();
+    } catch (_) {}
+
+    await _connect(apiKey: key, systemPrompt: prompt);
+    _swappingForContinuity = false;
+  }
+
   void _handleServerMessage(dynamic raw) {
     Map<String, dynamic> msg;
     try {
@@ -437,6 +498,28 @@ For anything about the app, an order, or a product, answer naturally and helpful
     if (msg.containsKey('error')) {
       _phaseController.add(LiveCallPhase.error);
       onError?.call('Server error: ${msg['error']}');
+      return;
+    }
+
+    // Server hands us a fresh handle roughly every time it's safe to
+    // do so — save the latest one so whichever connection comes next
+    // (proactive goAway swap, or a plain dropped-socket reconnect) can
+    // pick the conversation back up instead of starting over.
+    if (msg.containsKey('sessionResumptionUpdate')) {
+      final update = msg['sessionResumptionUpdate'] as Map<String, dynamic>;
+      if (update['resumable'] == true && update['newHandle'] != null) {
+        _sessionResumeHandle = update['newHandle'] as String;
+      }
+      return;
+    }
+
+    // Google's ~60s warning before it force-closes this connection
+    // (the ~10 minute hard cap). Swap to a new connection right now,
+    // on our terms, using the resumption handle above — instead of
+    // waiting for the abrupt close and having the buyer hear dead air
+    // while the existing reconnect-on-drop logic kicks in.
+    if (msg.containsKey('goAway')) {
+      _reconnectForContinuity();
       return;
     }
 
@@ -494,8 +577,6 @@ For anything about the app, an order, or a product, answer naturally and helpful
         final inlineData = (part as Map<String, dynamic>)['inlineData'] as Map<String, dynamic>?;
         if (inlineData != null && inlineData['data'] != null) {
           final bytes = base64Decode(inlineData['data'] as String);
-          _suppressMicDuringPlayback = true;
-          _armResumeMicTimer();
           _phaseController.add(LiveCallPhase.aiSpeaking);
           if (_playbackSource != null) {
             _player.addAudioDataStream(_playbackSource!, bytes);
@@ -510,25 +591,7 @@ For anything about the app, an order, or a product, answer naturally and helpful
 
     if (serverContent['turnComplete'] == true) {
       _phaseController.add(LiveCallPhase.listening);
-      _armResumeMicTimer();
     }
-  }
-
-  /// (Re)starts the countdown to un-suppress the mic. Called on every
-  /// audio chunk *and* on turnComplete — deliberately not "only on
-  /// turnComplete". A trailing chunk that arrives slightly after
-  /// turnComplete (message reordering, or a model that batches audio +
-  /// transcript in one event) used to permanently strand
-  /// _suppressMicDuringPlayback at true forever, since nothing would
-  /// ever clear it again — the buyer's mic would silently stay dead for
-  /// the rest of the call after exactly one AI reply. Debouncing off of
-  /// "quiet for N ms" instead of a single signal self-heals regardless
-  /// of which event actually arrives last.
-  void _armResumeMicTimer() {
-    _resumeMicTimer?.cancel();
-    _resumeMicTimer = Timer(const Duration(milliseconds: 300), () {
-      _suppressMicDuringPlayback = false;
-    });
   }
 
   /// The buyer started talking over the AI — Google's own barge-in
@@ -537,8 +600,6 @@ For anything about the app, an order, or a product, answer naturally and helpful
   /// whatever audio is already buffered, so it actually feels
   /// interrupted rather than talking over them for another second.
   Future<void> _handleBargeIn() async {
-    _resumeMicTimer?.cancel();
-    _suppressMicDuringPlayback = false;
     if (_playbackHandle != null) {
       await _player.stop(_playbackHandle!);
     }
@@ -574,9 +635,7 @@ For anything about the app, an order, or a product, answer naturally and helpful
     _micSub = micStream.listen((chunk) {
       // Mic keeps recording while muted (instant unmute, no restart)
       // but a muted buyer's audio shouldn't reach the model at all.
-      // Same story while the AI's own voice is playing out loud —
-      // see _suppressMicDuringPlayback above.
-      if (_isMuted || _channel == null || _suppressMicDuringPlayback) return;
+      if (_isMuted || _channel == null) return;
       final message = {
         'realtimeInput': {
           'audio': {
@@ -611,11 +670,9 @@ For anything about the app, an order, or a product, answer naturally and helpful
   /// Ends the call — stops the mic, closes the socket, stops playback.
   Future<void> stop() async {
     _manualDisconnect = true;
+    _sessionResumeHandle = null;
     _connectTimeoutTimer?.cancel();
     _connectTimeoutTimer = null;
-    _resumeMicTimer?.cancel();
-    _resumeMicTimer = null;
-    _suppressMicDuringPlayback = false;
     await _micSub?.cancel();
     _micSub = null;
     try {
