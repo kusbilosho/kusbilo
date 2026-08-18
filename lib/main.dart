@@ -13,11 +13,7 @@ import 'features/cart/presentation/providers/cart_provider.dart';
 import 'features/home/data/catalog_provider.dart';
 import 'features/home/presentation/screens/home_screen.dart';
 import 'features/addresses/presentation/providers/addresses_provider.dart';
-import 'features/admin/presentation/providers/admin_provider.dart';
 import 'features/favorites/presentation/providers/favorites_provider.dart';
-import 'features/merchant/presentation/providers/merchant_provider.dart';
-import 'features/merchant/presentation/providers/seller_orders_provider.dart';
-import 'features/merchant/presentation/providers/seller_products_provider.dart';
 import 'features/order/presentation/providers/order_provider.dart';
 import 'features/profile/presentation/providers/user_profile_provider.dart';
 import 'firebase_options.dart';
@@ -53,11 +49,7 @@ class GaonHaatApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AuthFlowProvider()),
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => CatalogProvider()),
-        ChangeNotifierProvider(create: (_) => MerchantProvider()),
-        ChangeNotifierProvider(create: (_) => SellerProductsProvider()),
-        ChangeNotifierProvider(create: (_) => SellerOrdersProvider()),
         ChangeNotifierProvider(create: (_) => OrderProvider()),
-        ChangeNotifierProvider(create: (_) => AdminProvider()),
         ChangeNotifierProvider(create: (_) => FavoritesProvider()),
         ChangeNotifierProvider(create: (_) => AddressesProvider()),
         ChangeNotifierProvider(create: (_) => UserProfileProvider()),
