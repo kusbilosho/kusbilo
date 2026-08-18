@@ -30,6 +30,11 @@ class CatalogProvider extends ChangeNotifier {
   CatalogStatus _status = CatalogStatus.idle;
   String? _errorMessage;
 
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _categoriesSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _productsSub;
+  bool _categoriesReady = false;
+  bool _productsReady = false;
+
   List<Category> get categories => _categories;
   List<Product> get products => _products;
   CatalogStatus get status => _status;
@@ -53,44 +58,102 @@ class CatalogProvider extends ChangeNotifier {
     return null;
   }
 
-  /// Loads the catalog from Firestore. Safe to call multiple times —
-  /// only refetches if not already loaded, so screens can call this in
+  /// Loads the catalog from Firestore and then keeps it live. Safe to
+  /// call multiple times — if already subscribed, this is a no-op
+  /// unless [forceRefresh] is passed (used for pull-to-refresh and the
+  /// error screen's retry button), so screens can call this in
   /// initState without worrying about duplicate work.
+  ///
+  /// Categories and products are backed by `.snapshots()`, not a
+  /// one-time `.get()` — a merchant adding, editing, or deleting a
+  /// product updates every buyer's app within moments, with nobody
+  /// needing to restart or pull-to-refresh to see it. The two listener
+  /// setups and the seed-check all fire in parallel instead of one
+  /// after another, since they don't actually depend on each other —
+  /// that alone used to add two full sequential round trips to every
+  /// cold start before a single product was visible.
   Future<void> load({bool forceRefresh = false}) async {
     if (_status == CatalogStatus.loaded && !forceRefresh) return;
+    if (_categoriesSub != null && !forceRefresh) return;
+
+    await _categoriesSub?.cancel();
+    await _productsSub?.cancel();
+    _categoriesReady = false;
+    _productsReady = false;
 
     _status = CatalogStatus.loading;
+    _errorMessage = null;
     notifyListeners();
 
+    final firstCategories = Completer<void>();
+    final firstProducts = Completer<void>();
+
+    // Unawaited on purpose — seeding a brand-new project and the two
+    // live listeners below don't need to happen in order. If the
+    // collections are empty, the listeners' first snapshot will just
+    // be empty, then update again the moment _seedIfEmpty's batch
+    // commits, instead of buyers waiting on a seed-check round trip
+    // before they see anything at all on every normal (already-seeded)
+    // app open.
+    _seedIfEmpty().catchError((_) {
+      // A failed seed attempt on an already-seeded project is harmless
+      // (the listeners below still work fine); only a genuinely empty,
+      // unseedable project would show an empty catalog, which the
+      // error/timeout handling further down still catches.
+    });
+
+    _categoriesSub = _firestore.collection('categories').snapshots().listen(
+      (snap) {
+        _categories = snap.docs.map(_categoryFromDoc).toList();
+        _categoriesReady = true;
+        if (!firstCategories.isCompleted) firstCategories.complete();
+        _markLoadedIfReady();
+      },
+      onError: (e) {
+        if (!firstCategories.isCompleted) firstCategories.completeError(e);
+      },
+    );
+
+    _productsSub = _firestore.collection('products').snapshots().listen(
+      (snap) {
+        _products = snap.docs
+            .map(_productFromDoc)
+            .where((p) => p.isActive && p.stock > 0)
+            .toList();
+        _productsReady = true;
+        if (!firstProducts.isCompleted) firstProducts.complete();
+        _markLoadedIfReady();
+      },
+      onError: (e) {
+        if (!firstProducts.isCompleted) firstProducts.completeError(e);
+      },
+    );
+
     try {
-      await _seedIfEmpty().timeout(_catalogFetchTimeout);
-
-      final categorySnap = await _firestore
-          .collection('categories')
-          .get()
+      await Future.wait([firstCategories.future, firstProducts.future])
           .timeout(_catalogFetchTimeout);
-      _categories = categorySnap.docs.map(_categoryFromDoc).toList();
-
-      final productSnap = await _firestore
-          .collection('products')
-          .get()
-          .timeout(_catalogFetchTimeout);
-      _products = productSnap.docs
-          .map(_productFromDoc)
-          .where((p) => p.isActive && p.stock > 0)
-          .toList();
-
-      _status = CatalogStatus.loaded;
-    } on TimeoutException catch (_) {
+    } on TimeoutException {
       // The request never came back (stalled connection, app resumed after
       // being backgrounded a long time, etc.) — surface this as a normal
       // error instead of leaving the UI stuck on the loading skeleton.
       _status = CatalogStatus.error;
       _errorMessage =
           'Connection is taking too long. Please check your internet and try again.';
+      notifyListeners();
+      return;
     } catch (e) {
       _status = CatalogStatus.error;
       _errorMessage = e.toString();
+      notifyListeners();
+      return;
+    }
+
+    _markLoadedIfReady();
+  }
+
+  void _markLoadedIfReady() {
+    if (_categoriesReady && _productsReady) {
+      _status = CatalogStatus.loaded;
     }
     notifyListeners();
   }
@@ -177,6 +240,13 @@ class CatalogProvider extends ChangeNotifier {
     }
 
     await batch.commit();
+  }
+
+  @override
+  void dispose() {
+    _categoriesSub?.cancel();
+    _productsSub?.cancel();
+    super.dispose();
   }
 }
 
