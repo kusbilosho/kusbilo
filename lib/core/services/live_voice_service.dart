@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:record/record.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -203,6 +202,14 @@ class LiveVoiceService {
       channels: Channels.mono,
       format: BufferType.s16le,
       bufferingType: BufferingType.released,
+      // flutter_soloud defaults bufferingTimeNeeds to 2 FULL SECONDS if
+      // left unset — meaning playback silently waits for 2s of audio
+      // to accumulate before making a sound at all. That's the single
+      // biggest source of "AI's reply arrives late" on a call: every
+      // single reply eats a hidden 2s tax before the buyer hears
+      // anything. 0.1s is enough to avoid stutter on a steady stream
+      // without the delay feeling like a real phone call.
+      bufferingTimeNeeds: 0.1,
     );
     _playbackHandle = await _player.play(_playbackSource!);
   }
@@ -233,17 +240,8 @@ class LiveVoiceService {
   }) {
     final catalogLines = products
         .where((p) => p.isActive && p.stock > 0)
-        .map((p) {
-          // Every extra token here is context Gemini re-considers on
-          // every single turn for the whole call — a handful of
-          // sellers writing paragraph-length descriptions could quietly
-          // turn into a multi-thousand-token system prompt and add
-          // real, felt latency to every reply. Tags matter more than
-          // prose for voice-search matching anyway, so the description
-          // is just a light supplement, not the main signal.
-          final desc = p.description.length > 120 ? '${p.description.substring(0, 120)}…' : p.description;
-          return '${p.id} | ${p.nameHi} / ${p.nameEn} | ₹${p.priceValue}${p.unit} | tags: ${p.tags.join(', ')} | $desc';
-        })
+        .map((p) =>
+            '${p.id} | ${p.nameHi} / ${p.nameEn} | ₹${p.priceValue}${p.unit} | tags: ${p.tags.join(', ')} | ${p.description}')
         .join('\n');
 
     final appFaq = '''
@@ -334,11 +332,6 @@ For anything about the app, an order, or a product, answer naturally and helpful
               'prebuiltVoiceConfig': {'voiceName': 'Kore'},
             },
           },
-          // Explicitly pinned even though 'minimal' is already this
-          // model's default — this is the fastest setting Gemini 3.1
-          // offers, and pinning it means a future default change on
-          // Google's side can never silently slow the call down.
-          'thinkingConfig': {'thinkingLevel': 'minimal'},
         },
         'systemInstruction': {
           'parts': [
@@ -378,18 +371,17 @@ For anything about the app, an order, or a product, answer naturally and helpful
         // Tunes how Gemini decides when you've started/stopped talking —
         // LOW sensitivity behaves more like a real call: it won't flinch
         // at background noise, but still responds promptly on a pause.
-        // silenceDurationMs is the main lever on "how fast does it
-        // respond" — every ms here is a flat delay added to *every*
-        // single turn before the model even starts generating a reply.
-        // 300ms is short enough to feel snappy without cutting the
-        // buyer off mid-sentence during a normal breathing pause.
         'realtimeInputConfig': {
           'automaticActivityDetection': {
             'disabled': false,
-            'startOfSpeechSensitivity': 'START_SENSITIVITY_LOW',
+            // HIGH here just means "notice the buyer started talking
+            // sooner" — quicker to react at the start of a turn. Kept
+            // endOfSpeechSensitivity at LOW so natural mid-sentence
+            // pauses still don't get mistaken for the buyer finishing.
+            'startOfSpeechSensitivity': 'START_SENSITIVITY_HIGH',
             'endOfSpeechSensitivity': 'END_SENSITIVITY_LOW',
-            'prefixPaddingMs': 100,
-            'silenceDurationMs': 300,
+            'prefixPaddingMs': 150,
+            'silenceDurationMs': 350,
           },
           'activityHandling': 'START_OF_ACTIVITY_INTERRUPTS',
         },
@@ -502,9 +494,6 @@ For anything about the app, an order, or a product, answer naturally and helpful
         final inlineData = (part as Map<String, dynamic>)['inlineData'] as Map<String, dynamic>?;
         if (inlineData != null && inlineData['data'] != null) {
           final bytes = base64Decode(inlineData['data'] as String);
-          if (!_suppressMicDuringPlayback) {
-            debugPrint('[MIC] First AI audio chunk of this turn arrived at ${DateTime.now()}');
-          }
           _suppressMicDuringPlayback = true;
           _armResumeMicTimer();
           _phaseController.add(LiveCallPhase.aiSpeaking);
@@ -535,16 +524,9 @@ For anything about the app, an order, or a product, answer naturally and helpful
   /// the rest of the call after exactly one AI reply. Debouncing off of
   /// "quiet for N ms" instead of a single signal self-heals regardless
   /// of which event actually arrives last.
-  ///
-  /// 200ms, not 600ms — every extra millisecond here is dead air where
-  /// the buyer can be talking and nothing reaches the server, forcing
-  /// them to repeat themselves. This is the single biggest lever on how
-  /// "slow" the call feels, since it fires on *every* turn. 200ms is
-  /// enough to swallow a genuinely trailing echo tail without eating
-  /// into the buyer's next sentence.
   void _armResumeMicTimer() {
     _resumeMicTimer?.cancel();
-    _resumeMicTimer = Timer(const Duration(milliseconds: 200), () {
+    _resumeMicTimer = Timer(const Duration(milliseconds: 300), () {
       _suppressMicDuringPlayback = false;
     });
   }
@@ -568,15 +550,12 @@ For anything about the app, an order, or a product, answer naturally and helpful
       channels: Channels.mono,
       format: BufferType.s16le,
       bufferingType: BufferingType.released,
+      bufferingTimeNeeds: 0.1,
     );
     _playbackHandle = await _player.play(_playbackSource!);
   }
 
-  int _micChunkCount = 0;
-
   Future<void> _startMicStreaming() async {
-    final micStartedAt = DateTime.now();
-    debugPrint('[MIC] startStream() called at $micStartedAt');
     final micStream = await _recorder.startStream(const RecordConfig(
       encoder: AudioEncoder.pcm16bits,
       sampleRate: 16000,
@@ -592,26 +571,12 @@ For anything about the app, an order, or a product, answer naturally and helpful
       echoCancel: true,
       autoGain: true,
     ));
-    debugPrint('[MIC] startStream() resolved after ${DateTime.now().difference(micStartedAt).inMilliseconds}ms — mic is live');
-
     _micSub = micStream.listen((chunk) {
-      _micChunkCount++;
-      final now = DateTime.now();
       // Mic keeps recording while muted (instant unmute, no restart)
       // but a muted buyer's audio shouldn't reach the model at all.
       // Same story while the AI's own voice is playing out loud —
       // see _suppressMicDuringPlayback above.
-      if (_isMuted || _channel == null || _suppressMicDuringPlayback) {
-        // Logged every 10th dropped chunk instead of every single one —
-        // this fires constantly while the AI is talking (expected), so
-        // logging every chunk would flood logcat and bury the signal.
-        if (_micChunkCount % 10 == 0) {
-          debugPrint('[MIC] #$_micChunkCount dropped at $now '
-              '(muted=$_isMuted, noChannel=${_channel == null}, suppressed=$_suppressMicDuringPlayback)');
-        }
-        return;
-      }
-      final sizeBytes = chunk.length;
+      if (_isMuted || _channel == null || _suppressMicDuringPlayback) return;
       final message = {
         'realtimeInput': {
           'audio': {
@@ -621,15 +586,6 @@ For anything about the app, an order, or a product, answer naturally and helpful
         },
       };
       _channel?.sink.add(jsonEncode(message));
-      final sentAt = DateTime.now();
-      // If the gap between "chunk left the mic" and "finished
-      // encoding+handed to the socket" is ever more than a few ms, the
-      // bottleneck is CPU-side (JSON/base64 work on the main isolate),
-      // not the network or the mic hardware itself.
-      final encodeMs = sentAt.difference(now).inMilliseconds;
-      if (_micChunkCount % 20 == 0) {
-        debugPrint('[MIC] #$_micChunkCount sent — ${sizeBytes}B, encode+send took ${encodeMs}ms');
-      }
     });
   }
 
