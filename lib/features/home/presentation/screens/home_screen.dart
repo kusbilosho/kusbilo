@@ -10,8 +10,6 @@ import '../../../../core/widgets/lang_toggle.dart';
 import '../../../../core/widgets/shimmer_loading.dart';
 import '../../../cart/presentation/providers/cart_provider.dart';
 import '../../../checkout/presentation/screens/checkout_screen.dart';
-import '../../../merchant/presentation/providers/merchant_provider.dart';
-import '../../../merchant/presentation/screens/merchant_kyc_screen.dart';
 import '../../data/catalog_provider.dart';
 import '../../data/models/category.dart';
 import '../../data/models/product.dart';
@@ -19,10 +17,6 @@ import '../../../order/presentation/screens/order_history_screen.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/widgets/static_info_screen.dart';
-import '../../../admin/presentation/providers/admin_provider.dart';
-import '../../../admin/presentation/screens/admin_kyc_queue_screen.dart';
-import '../../../admin/presentation/screens/manage_categories_screen.dart';
-import '../../../admin/presentation/screens/payment_settings_screen.dart';
 import '../../../addresses/presentation/providers/addresses_provider.dart';
 import '../../../addresses/presentation/screens/addresses_screen.dart';
 import '../../../favorites/presentation/providers/favorites_provider.dart';
@@ -70,7 +64,6 @@ class _HomeShellScreenState extends State<HomeShellScreen> with WidgetsBindingOb
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     context.read<CatalogProvider>().load();
-    context.read<MerchantProvider>().load();
     context.read<CartProvider>().load();
     context.read<FavoritesProvider>().load();
     context.read<UserProfileProvider>().load();
@@ -1312,6 +1305,22 @@ class _ProductCard extends StatelessWidget {
   }
 }
 
+/// -----------------------------------------------------------------------
+/// PUT YOUR MERCHANT APP LINK HERE — Play Store link, or a custom
+/// deep-link/website, whatever you want "Become a Merchant" to open.
+/// -----------------------------------------------------------------------
+const _merchantAppUrl = 'https://play.google.com/store/apps/details?id=REPLACE_ME';
+
+Future<void> _openMerchantApp(BuildContext context) async {
+  final uri = Uri.parse(_merchantAppUrl);
+  final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!opened && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Couldn't open the merchant app link.")),
+    );
+  }
+}
+
 /// Profile tab — shopping-app-style layout: avatar + phone number header,
 /// grouped menu sections (My Account / Seller / Support), and logout.
 /// Every row except Logout is UI-only for now (shows a "coming soon"
@@ -1323,24 +1332,7 @@ class _ProfileTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final strings = context.watch<LocaleProvider>().strings;
     final phone = FirebaseAuth.instance.currentUser?.phoneNumber ?? '';
-    final kycStatus = context.watch<MerchantProvider>().status;
     final savedName = context.watch<UserProfileProvider>().name;
-
-    String sellerSubtitle;
-    switch (kycStatus) {
-      case KycStatus.notApplied:
-        sellerSubtitle = strings.becomeMerchantSubtitle;
-        break;
-      case KycStatus.pending:
-        sellerSubtitle = strings.kycStatusPendingShort;
-        break;
-      case KycStatus.approved:
-        sellerSubtitle = strings.kycStatusApprovedShort;
-        break;
-      case KycStatus.rejected:
-        sellerSubtitle = strings.kycStatusRejectedShort;
-        break;
-    }
 
     return CustomScrollView(
       slivers: [
@@ -1400,15 +1392,13 @@ class _ProfileTab extends StatelessWidget {
               title: strings.sellerSection,
               rows: [
                 _MenuRowData(Icons.storefront_rounded, strings.becomeMerchant, const Color(0xFFC0453B),
-                    subtitle: sellerSubtitle,
-                    onTap: () => Navigator.of(context)
-                        .push(MaterialPageRoute(builder: (_) => const MerchantEntryScreen()))),
+                    subtitle: strings.becomeMerchantSubtitle,
+                    onTap: () => _openMerchantApp(context)),
               ],
               strings: strings,
             ),
           ),
         ),
-        SliverToBoxAdapter(child: _AdminMenuSection(strings: strings)),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
           sliver: SliverToBoxAdapter(
@@ -1569,42 +1559,6 @@ class _ProfileTab extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _AdminMenuSection extends StatelessWidget {
-  final AppStrings strings;
-  const _AdminMenuSection({required this.strings});
-
-  @override
-  Widget build(BuildContext context) {
-    // Hidden entirely for non-admins — checkIsAdmin() reads a server-set
-    // custom claim, so there's nothing here a regular user could spoof
-    // their way into by, say, tampering with local app state.
-    return FutureBuilder<bool>(
-      future: context.read<AdminProvider>().checkIsAdmin(),
-      builder: (context, snapshot) {
-        if (snapshot.data != true) return const SizedBox.shrink();
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
-          child: _MenuSection(
-            title: 'Admin',
-            rows: [
-              _MenuRowData(Icons.fact_check_outlined, strings.adminMenuLabel, AppColors.green,
-                  onTap: () => Navigator.of(context)
-                      .push(MaterialPageRoute(builder: (_) => const AdminKycQueueScreen()))),
-              _MenuRowData(Icons.category_outlined, 'Manage Categories', AppColors.green,
-                  onTap: () => Navigator.of(context)
-                      .push(MaterialPageRoute(builder: (_) => const ManageCategoriesScreen()))),
-              _MenuRowData(Icons.account_balance_wallet_outlined, 'Payment Settings', AppColors.green,
-                  onTap: () => Navigator.of(context)
-                      .push(MaterialPageRoute(builder: (_) => const PaymentSettingsScreen()))),
-            ],
-            strings: strings,
-          ),
-        );
-      },
     );
   }
 }
