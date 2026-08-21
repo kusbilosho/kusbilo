@@ -1,7 +1,7 @@
 import 'package:firebase_core/firebase_core.dart';
 
-/// Firebase config for GaonHaat, built from the google-services.json
-/// values for the `com.gaonhaat` Android app. If you ever run
+/// Firebase config for Kusbilo, built from the google-services.json
+/// values for the `com.kusbilo` Android app. If you ever run
 /// `flutterfire configure`, let it regenerate this file instead —
 /// this hand-written version covers Android only.
 class DefaultFirebaseOptions {
