@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Signature brand mark — renders the exact GaonHaat logo asset so the
+/// Signature brand mark — renders the exact Kusbilo logo asset so the
 /// in-app badge always matches the app icon pixel-for-pixel, instead of
 /// approximating it with a built-in icon.
 class HaatBadge extends StatelessWidget {
@@ -11,7 +11,7 @@ class HaatBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Image.asset(
-      'assets/images/gaonhaat_logo.png',
+      'assets/images/kusbilo_logo.png',
       width: size,
       height: size,
       fit: BoxFit.contain,
