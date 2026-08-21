@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// GaonHaat brand palette — "mandi/haat" theme.
+/// Kusbilo brand palette — "mandi/haat" theme.
 /// Kept as a single source of truth so every screen stays visually consistent.
 class AppColors {
   AppColors._();
