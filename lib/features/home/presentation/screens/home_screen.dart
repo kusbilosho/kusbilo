@@ -1424,7 +1424,7 @@ class _ProfileTab extends StatelessWidget {
                                 StaticInfoSection(
                                   actionIcon: Icons.email,
                                   actionLabel: strings.emailUsButton,
-                                  onAction: () => launchUrl(Uri.parse('mailto:support@gaonhaat.app')),
+                                  onAction: () => launchUrl(Uri.parse('mailto:support@kusbilo.app')),
                                 ),
                               ],
                             )))),
