@@ -35,11 +35,11 @@ void main() async {
   //     providerApple: AppleAppAttestProvider(),
   //   );
   await NotificationService.initForegroundHandler();
-  runApp(const GaonHaatApp());
+  runApp(const KusbiloApp());
 }
 
-class GaonHaatApp extends StatelessWidget {
-  const GaonHaatApp({super.key});
+class KusbiloApp extends StatelessWidget {
+  const KusbiloApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -55,7 +55,7 @@ class GaonHaatApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => UserProfileProvider()),
       ],
       child: MaterialApp(
-        title: 'GaonHaat',
+        title: 'Kusbilo',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
         home: const AuthGate(),
