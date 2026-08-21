@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.gaonhaat"
+    namespace = "com.kusbilo"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "29.0.14206865"
 
@@ -21,7 +21,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.gaonhaat"
+        applicationId = "com.kusbilo"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
