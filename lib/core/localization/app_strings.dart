@@ -11,7 +11,7 @@ class AppStrings {
   bool get _isHindi => language == AppLanguage.hindi;
 
   String get appName => 'गाँवहाट';
-  String get appNameEnglish => 'GaonHaat';
+  String get appNameEnglish => 'Kusbilo';
 
   String get tagline =>
       _isHindi ? 'आपके गाँव का बाज़ार, अब ऐप में' : 'Your village market, now in an app';
@@ -27,7 +27,7 @@ class AppStrings {
   String get continueButton => _isHindi ? 'आगे बढ़ें' : 'Continue';
 
   String get termsPrefix =>
-      _isHindi ? 'जारी रखकर आप गाँवहाट की' : "By continuing, you agree to GaonHaat's";
+      _isHindi ? 'जारी रखकर आप गाँवहाट की' : "By continuing, you agree to Kusbilo's";
 
   String get termsOfService => _isHindi ? 'नियम व शर्तों' : 'Terms of Service';
 
@@ -623,7 +623,7 @@ class AppStrings {
 
   String get aboutUsBody => _isHindi
       ? 'गाँवहाट एक ऐसा बाज़ार है जो आपके गाँव के दुकानदारों और खरीदारों को सीधे जोड़ता है — बिना किसी बिचौलिए के। स्थानीय उत्पाद, आवाज़ से ऑर्डर, और आपकी अपनी भाषा में — यह सब आपके गाँव को थोड़ा आसान बनाने के लिए बनाया गया है।'
-      : "GaonHaat is a marketplace that connects your village's shopkeepers directly with buyers — no middleman. Local products, voice ordering, and your own language — all built to make your village a little easier.";
+      : "Kusbilo is a marketplace that connects your village's shopkeepers directly with buyers — no middleman. Local products, voice ordering, and your own language — all built to make your village a little easier.";
 
   String get privacyPolicyTitle => _isHindi ? 'गोपनीयता नीति' : 'Privacy Policy';
 
@@ -637,7 +637,7 @@ class AppStrings {
       ? [
           (
             null,
-            'यह गोपनीयता नीति बताती है कि GaonHaat ऐप आपकी जानकारी कैसे इकट्ठा करता है, उपयोग करता है, और सुरक्षित रखता है। ऐप इस्तेमाल करके आप इस नीति से सहमत होते हैं।',
+            'यह गोपनीयता नीति बताती है कि Kusbilo ऐप आपकी जानकारी कैसे इकट्ठा करता है, उपयोग करता है, और सुरक्षित रखता है। ऐप इस्तेमाल करके आप इस नीति से सहमत होते हैं।',
           ),
           (
             'हम खरीदारों से क्या जानकारी लेते हैं',
@@ -661,13 +661,13 @@ class AppStrings {
           ),
           (
             'संपर्क करें',
-            'सवाल या शिकायत के लिए: support@gaonhaat.app',
+            'सवाल या शिकायत के लिए: support@kusbilo.app',
           ),
         ]
       : [
           (
             null,
-            'This Privacy Policy explains how the GaonHaat app collects, uses, and protects your information. By using the app, you agree to this policy.',
+            'This Privacy Policy explains how the Kusbilo app collects, uses, and protects your information. By using the app, you agree to this policy.',
           ),
           (
             'What we collect from buyers',
@@ -691,7 +691,7 @@ class AppStrings {
           ),
           (
             'Contact us',
-            'For questions or complaints: support@gaonhaat.app',
+            'For questions or complaints: support@kusbilo.app',
           ),
         ];
 
@@ -699,7 +699,7 @@ class AppStrings {
       ? [
           (
             null,
-            'GaonHaat ऐप इस्तेमाल करने से पहले कृपया ये शर्तें ध्यान से पढ़ें। ऐप इस्तेमाल करके आप इनसे सहमत होते हैं।',
+            'Kusbilo ऐप इस्तेमाल करने से पहले कृपया ये शर्तें ध्यान से पढ़ें। ऐप इस्तेमाल करके आप इनसे सहमत होते हैं।',
           ),
           (
             'भुगतान',
@@ -715,11 +715,11 @@ class AppStrings {
           ),
           (
             'विक्रेता की ज़िम्मेदारी',
-            'विक्रेता अपने द्वारा बेचे गए सामान की गुणवत्ता, कीमत, और उपलब्धता के लिए खुद ज़िम्मेदार हैं। GaonHaat सिर्फ खरीदार और विक्रेता को जोड़ने का माध्यम है।',
+            'विक्रेता अपने द्वारा बेचे गए सामान की गुणवत्ता, कीमत, और उपलब्धता के लिए खुद ज़िम्मेदार हैं। Kusbilo सिर्फ खरीदार और विक्रेता को जोड़ने का माध्यम है।',
           ),
           (
             'ज़िम्मेदारी की सीमा',
-            'GaonHaat पूरी कोशिश करता है कि सेवा सही तरीके से चले, लेकिन डिलीवरी में देरी, सामान की गुणवत्ता, या तकनीकी खराबी से हुए किसी नुकसान की पूरी ज़िम्मेदारी नहीं ले सकता, कानून द्वारा अनुमत सीमा तक।',
+            'Kusbilo पूरी कोशिश करता है कि सेवा सही तरीके से चले, लेकिन डिलीवरी में देरी, सामान की गुणवत्ता, या तकनीकी खराबी से हुए किसी नुकसान की पूरी ज़िम्मेदारी नहीं ले सकता, कानून द्वारा अनुमत सीमा तक।',
           ),
           (
             'बदलाव',
@@ -727,13 +727,13 @@ class AppStrings {
           ),
           (
             'संपर्क करें',
-            'सवाल या शिकायत के लिए: support@gaonhaat.app',
+            'सवाल या शिकायत के लिए: support@kusbilo.app',
           ),
         ]
       : [
           (
             null,
-            'Please read these Terms carefully before using the GaonHaat app. By using the app, you agree to them.',
+            'Please read these Terms carefully before using the Kusbilo app. By using the app, you agree to them.',
           ),
           (
             'Payment',
@@ -749,11 +749,11 @@ class AppStrings {
           ),
           (
             'Seller responsibility',
-            'Sellers are solely responsible for the quality, pricing, and availability of the goods they sell. GaonHaat is only a medium connecting buyers and sellers.',
+            'Sellers are solely responsible for the quality, pricing, and availability of the goods they sell. Kusbilo is only a medium connecting buyers and sellers.',
           ),
           (
             'Limitation of liability',
-            'GaonHaat makes every effort to keep the service running smoothly, but cannot take full responsibility for losses from delivery delays, product quality, or technical faults, to the extent permitted by law.',
+            'Kusbilo makes every effort to keep the service running smoothly, but cannot take full responsibility for losses from delivery delays, product quality, or technical faults, to the extent permitted by law.',
           ),
           (
             'Changes',
@@ -761,13 +761,13 @@ class AppStrings {
           ),
           (
             'Contact us',
-            'For questions or complaints: support@gaonhaat.app',
+            'For questions or complaints: support@kusbilo.app',
           ),
         ];
 
   String get rateAppBody => _isHindi
       ? 'अगर आपको गाँवहाट पसंद आया, तो कृपया इसे रेट करें — इससे और लोगों तक पहुँचने में मदद मिलती है।'
-      : 'If you enjoy GaonHaat, please rate it — it helps more people discover the app.';
+      : 'If you enjoy Kusbilo, please rate it — it helps more people discover the app.';
 
   String get rateAppButton => _isHindi ? 'अभी रेट करें' : 'Rate now';
 
@@ -945,5 +945,5 @@ class AppStrings {
 
   String get faqAppNameAnswer => _isHindi
       ? 'यह गांवहाट है — अपने गांव के आसपास की दुकानों से सीधे सामान मंगाने का ऐप।'
-      : 'This is GaonHaat — an app to order straight from shops around your village.';
+      : 'This is Kusbilo — an app to order straight from shops around your village.';
 }
