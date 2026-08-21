@@ -10,7 +10,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:90426342126:android:dc3e758aad2a96dd4591ff",
         "android_client_info": {
-          "package_name": "com.gaonhaat"
+          "package_name": "com.kusbilo"
         }
       },
       "oauth_client": [
@@ -18,7 +18,7 @@
           "client_id": "90426342126-7sjnrrf2qapvde8h0bikig399ig69b5g.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.gaonhaat",
+            "package_name": "com.kusbilo",
             "certificate_hash": "83997721d37787ad8e724aa5eb358f3eb13335bb"
           }
         },
@@ -47,7 +47,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:90426342126:android:e43b90091422fd2e4591ff",
         "android_client_info": {
-          "package_name": "com.gaonhaat.gaonhaa"
+          "package_name": "com.kusbilo.gaonhaa"
         }
       },
       "oauth_client": [
@@ -76,7 +76,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:90426342126:android:680f06f88b6789ba4591ff",
         "android_client_info": {
-          "package_name": "com.gaonhaat.gaonhaat"
+          "package_name": "com.kusbilo.kusbilo"
         }
       },
       "oauth_client": [
@@ -105,7 +105,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:90426342126:android:ebc401bdfd6a7f324591ff",
         "android_client_info": {
-          "package_name": "com.gaonhaat_merchant"
+          "package_name": "com.kusbilo_merchant"
         }
       },
       "oauth_client": [
@@ -113,7 +113,7 @@
           "client_id": "90426342126-h13klf226r3dook8jqfss76jeln1t3l1.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.gaonhaat_merchant",
+            "package_name": "com.kusbilo_merchant",
             "certificate_hash": "69bcb91965f59fa2999583492de7c2278f3c09a1"
           }
         },
