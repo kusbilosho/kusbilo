@@ -1,5 +1,5 @@
-name: gaonhaat
-description: GaonHaat — Aapke gaon ka bazaar, ab app mein.
+name: kusbilo
+description: Kusbilo — Aapke gaon ka bazaar, ab app mein.
 publish_to: "none"
 version: 0.1.0
 
@@ -67,7 +67,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/images/gaonhaat_logo.png
+    - assets/images/kusbilo_logo.png
     - assets/icon/icon.png
 
 flutter_launcher_icons:
