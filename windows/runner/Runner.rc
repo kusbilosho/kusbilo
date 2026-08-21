@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.gaonhaat" "\0"
-            VALUE "FileDescription", "gaonhaat" "\0"
+            VALUE "CompanyName", "com.kusbilo" "\0"
+            VALUE "FileDescription", "kusbilo" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "gaonhaat" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.gaonhaat. All rights reserved." "\0"
-            VALUE "OriginalFilename", "gaonhaat.exe" "\0"
-            VALUE "ProductName", "gaonhaat" "\0"
+            VALUE "InternalName", "kusbilo" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 com.kusbilo. All rights reserved." "\0"
+            VALUE "OriginalFilename", "kusbilo.exe" "\0"
+            VALUE "ProductName", "kusbilo" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
