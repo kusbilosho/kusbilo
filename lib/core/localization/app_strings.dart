@@ -485,6 +485,9 @@ class AppStrings {
   String addedToCartMessage(String productName) =>
       _isHindi ? '$productName कार्ट में जुड़ गया' : '$productName added to cart';
 
+  String get inclusiveOfTaxesLabel =>
+      _isHindi ? 'सभी टैक्स सहित' : 'Inclusive of all taxes';
+
   String get myOrdersTitle => _isHindi ? 'मेरे ऑर्डर' : 'My Orders';
 
   String get noOrdersTitle => _isHindi ? 'अभी कोई ऑर्डर नहीं' : 'No orders yet';
