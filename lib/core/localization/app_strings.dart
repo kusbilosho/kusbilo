@@ -10,7 +10,7 @@ class AppStrings {
 
   bool get _isHindi => language == AppLanguage.hindi;
 
-  String get appName => 'गाँवहाट';
+  String get appName => 'कुसबिलो';
   String get appNameEnglish => 'Kusbilo';
 
   String get tagline =>
@@ -467,6 +467,23 @@ class AppStrings {
   String get continueShoppingButton => _isHindi ? 'खरीदारी जारी रखें' : 'Continue shopping';
 
   String get viewOrderButton => _isHindi ? 'ऑर्डर देखें' : 'View order';
+
+  // ---- Seller / merchant storefront ----
+
+  String get soldByLabel => _isHindi ? 'विक्रेता' : 'Sold by';
+
+  String get exploreAllProductsLabel =>
+      _isHindi ? 'सभी सामान देखें' : 'Explore all products';
+
+  String sellerProductsTitle(String shopName) => shopName;
+
+  String get noOtherProductsMessage =>
+      _isHindi ? 'इस विक्रेता के फ़िलहाल और सामान नहीं हैं' : 'This seller has no other products right now';
+
+  // ---- Added-to-cart toast ----
+
+  String addedToCartMessage(String productName) =>
+      _isHindi ? '$productName कार्ट में जुड़ गया' : '$productName added to cart';
 
   String get myOrdersTitle => _isHindi ? 'मेरे ऑर्डर' : 'My Orders';
 
