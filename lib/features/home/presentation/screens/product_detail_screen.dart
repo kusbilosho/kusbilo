@@ -5,11 +5,13 @@ import '../../../../core/localization/app_strings.dart';
 import '../../../../core/localization/locale_provider.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../../core/widgets/added_to_cart_popup.dart';
 import '../../../cart/presentation/providers/cart_provider.dart';
 import '../../../favorites/presentation/providers/favorites_provider.dart';
 import '../../data/catalog_provider.dart';
 import '../../data/models/product.dart';
 import '../../data/models/review.dart';
+import 'seller_products_screen.dart';
 
 /// Full product page — big photo, description, tags, who's selling it,
 /// a quantity control, a ratings/reviews section fed by buyers who
@@ -107,7 +109,10 @@ class ProductDetailScreen extends StatelessWidget {
                   width: double.infinity,
                   child: qty == 0
                       ? ElevatedButton(
-                          onPressed: () => cart.add(product.id),
+                          onPressed: () {
+                            cart.add(product.id);
+                            showAddedToCartPopup(context, strings.addedToCartMessage(product.name(lang)));
+                          },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.green,
                             foregroundColor: Colors.white,
@@ -266,21 +271,95 @@ class _SellerRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = context.watch<LocaleProvider>().strings;
     return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       future: FirebaseFirestore.instance.collection('merchants').doc(ownerId).get(),
       builder: (context, snapshot) {
-        final shopName = snapshot.data?.data()?['shopName'] as String?;
+        final data = snapshot.data?.data();
+        final shopName = data?['shopName'] as String?;
         if (shopName == null) return const SizedBox.shrink();
-        return Row(
-          children: [
-            const Icon(Icons.storefront_rounded, size: 16, color: AppColors.mutedDark),
-            const SizedBox(width: 6),
-            Text(shopName, style: AppTextStyles.caption(fontSize: 12, color: AppColors.mutedDark)),
-          ],
+        final photoUrl = data?['shopPhotoUrl'] as String?;
+
+        return InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => SellerProductsScreen(ownerId: ownerId, shopName: shopName, photoUrl: photoUrl),
+            ),
+          ),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.line, width: 1),
+            ),
+            child: Row(
+              children: [
+                _SellerAvatar(shopName: shopName, photoUrl: photoUrl, size: 40),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(strings.soldByLabel, style: AppTextStyles.caption(fontSize: 11, color: AppColors.mutedDark)),
+                      const SizedBox(height: 2),
+                      Text(shopName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(strings.exploreAllProductsLabel,
+                    style: AppTextStyles.caption(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.green)),
+                const SizedBox(width: 2),
+                const Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.green),
+              ],
+            ),
+          ),
         );
       },
     );
   }
+}
+
+/// Shop's circular avatar — a real photo if the seller uploaded one
+/// (`shopPhotoUrl`), otherwise a colored circle with the shop name's
+/// first letter so the row never looks broken/empty for sellers who
+/// haven't added a photo yet.
+class _SellerAvatar extends StatelessWidget {
+  final String shopName;
+  final String? photoUrl;
+  final double size;
+  const _SellerAvatar({required this.shopName, required this.photoUrl, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = shopName.trim().isNotEmpty ? shopName.trim()[0].toUpperCase() : '?';
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(size / 2),
+      child: (photoUrl != null && photoUrl!.isNotEmpty)
+          ? Image.network(
+              photoUrl!,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _initialCircle(initial),
+            )
+          : _initialCircle(initial),
+    );
+  }
+
+  Widget _initialCircle(String initial) => Container(
+        width: size,
+        height: size,
+        decoration: const BoxDecoration(color: AppColors.sage, shape: BoxShape.circle),
+        alignment: Alignment.center,
+        child: Text(initial,
+            style: AppTextStyles.display(fontSize: size * 0.4, color: AppColors.green)),
+      );
 }
 
 class _SimilarProductCard extends StatelessWidget {
