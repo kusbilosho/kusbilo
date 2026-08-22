@@ -105,8 +105,20 @@ class CatalogProvider extends ChangeNotifier {
     _categoriesSub = _firestore.collection('categories').snapshots().listen(
       (snap) {
         _categories = snap.docs.map(_categoryFromDoc).toList();
-        _categoriesReady = true;
-        if (!firstCategories.isCompleted) firstCategories.complete();
+        // Firestore's .snapshots() fires an immediate snapshot from the
+        // local offline cache before the server responds. On a fresh
+        // install that cache is empty, so treating that first (empty)
+        // snapshot as "ready" flipped status to loaded instantly — the
+        // shimmer disappeared and Home opened with an empty/half-built
+        // page for a moment before the real server data streamed in a
+        // beat later. Only count a snapshot as "ready" once it's either
+        // confirmed by the server or already has real data (e.g. a
+        // returning user's valid cache) — a merely-empty cache snapshot
+        // no longer short-circuits the skeleton.
+        if (!snap.metadata.isFromCache || snap.docs.isNotEmpty) {
+          _categoriesReady = true;
+          if (!firstCategories.isCompleted) firstCategories.complete();
+        }
         _markLoadedIfReady();
       },
       onError: (e) {
@@ -120,8 +132,11 @@ class CatalogProvider extends ChangeNotifier {
             .map(_productFromDoc)
             .where((p) => p.isActive && p.stock > 0)
             .toList();
-        _productsReady = true;
-        if (!firstProducts.isCompleted) firstProducts.complete();
+        // Same cache-vs-server reasoning as the categories listener above.
+        if (!snap.metadata.isFromCache || snap.docs.isNotEmpty) {
+          _productsReady = true;
+          if (!firstProducts.isCompleted) firstProducts.complete();
+        }
         _markLoadedIfReady();
       },
       onError: (e) {
