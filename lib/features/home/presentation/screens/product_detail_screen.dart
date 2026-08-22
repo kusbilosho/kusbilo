@@ -40,6 +40,17 @@ class ProductDetailScreen extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: AppColors.cream,
+      bottomNavigationBar: _BottomActionBar(
+        product: product,
+        qty: qty,
+        strings: strings,
+        onAdd: () {
+          cart.add(product.id);
+          showAddedToCartPopup(context, strings.addedToCartMessage(product.name(lang)));
+        },
+        onIncrement: () => cart.increment(product.id),
+        onDecrement: () => cart.decrement(product.id),
+      ),
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
@@ -105,33 +116,6 @@ class ProductDetailScreen extends StatelessWidget {
                   _SellerRow(ownerId: product.ownerId!),
                 ],
                 const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: qty == 0
-                      ? ElevatedButton(
-                          onPressed: () {
-                            cart.add(product.id);
-                            showAddedToCartPopup(context, strings.addedToCartMessage(product.name(lang)));
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.green,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            elevation: 0,
-                          ),
-                          child: Text(strings.addToCart,
-                              style: AppTextStyles.body(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
-                        )
-                      : Center(
-                          child: _QtyStepperLarge(
-                            qty: qty,
-                            onIncrement: () => cart.increment(product.id),
-                            onDecrement: () => cart.decrement(product.id),
-                          ),
-                        ),
-                ),
-                const SizedBox(height: 28),
                 _ReviewsSection(productId: product.id, strings: strings),
                 if (similar.isNotEmpty) ...[
                   const SizedBox(height: 32),
@@ -154,6 +138,76 @@ class ProductDetailScreen extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Fixed bar pinned to the bottom of the product page — price on the
+/// left, Add-to-cart button (or the qty stepper once it's in the cart)
+/// on the right. Stays visible while the rest of the page scrolls
+/// underneath it, matching the layout of familiar shopping apps instead
+/// of burying the action button mid-page where it scrolls out of view.
+class _BottomActionBar extends StatelessWidget {
+  final Product product;
+  final int qty;
+  final AppStrings strings;
+  final VoidCallback onAdd;
+  final VoidCallback onIncrement;
+  final VoidCallback onDecrement;
+
+  const _BottomActionBar({
+    required this.product,
+    required this.qty,
+    required this.strings,
+    required this.onAdd,
+    required this.onIncrement,
+    required this.onDecrement,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, -3)),
+          ],
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(product.priceDisplay,
+                      style: AppTextStyles.display(fontSize: 17, color: AppColors.green)),
+                  Text(strings.inclusiveOfTaxesLabel,
+                      style: AppTextStyles.caption(fontSize: 11, color: AppColors.mutedDark)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            qty == 0
+                ? ElevatedButton(
+                    onPressed: onAdd,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.green,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 0,
+                    ),
+                    child: Text(strings.addToCart,
+                        style: AppTextStyles.body(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
+                  )
+                : _QtyStepperLarge(qty: qty, onIncrement: onIncrement, onDecrement: onDecrement),
+          ],
+        ),
       ),
     );
   }
