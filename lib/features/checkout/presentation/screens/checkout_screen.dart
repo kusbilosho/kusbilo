@@ -6,12 +6,12 @@ import '../../../../core/services/location_service.dart';
 import '../../../../core/services/upi_payment_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../../core/widgets/order_placed_popup.dart';
 import '../../../../core/widgets/primary_button.dart';
 import '../../../cart/presentation/providers/cart_provider.dart';
 import '../../../home/data/catalog_provider.dart';
 import '../../../order/data/models/order_item.dart';
 import '../../../order/presentation/providers/order_provider.dart';
-import '../../../order/presentation/screens/order_success_screen.dart';
 
 enum _PaymentMethod { cod, upi }
 
@@ -111,9 +111,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     }
 
     cart.clear();
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => OrderSuccessScreen(order: order)),
-    );
+    await showOrderPlacedPopup(context, order: order, strings: strings);
   }
 
   Future<void> _handlePlaceOrderPressed(int total) async {
