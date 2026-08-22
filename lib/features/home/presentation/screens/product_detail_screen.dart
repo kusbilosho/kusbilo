@@ -7,6 +7,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/widgets/added_to_cart_popup.dart';
 import '../../../cart/presentation/providers/cart_provider.dart';
+import '../../../checkout/presentation/screens/checkout_screen.dart';
 import '../../../favorites/presentation/providers/favorites_provider.dart';
 import '../../data/catalog_provider.dart';
 import '../../data/models/product.dart';
@@ -42,14 +43,13 @@ class ProductDetailScreen extends StatelessWidget {
       backgroundColor: AppColors.cream,
       bottomNavigationBar: _BottomActionBar(
         product: product,
-        qty: qty,
         strings: strings,
-        onAdd: () {
-          cart.add(product.id);
-          showAddedToCartPopup(context, strings.addedToCartMessage(product.name(lang)));
+        onPlaceOrder: () {
+          if (qty == 0) cart.add(product.id);
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const CheckoutScreen()),
+          );
         },
-        onIncrement: () => cart.increment(product.id),
-        onDecrement: () => cart.decrement(product.id),
       ),
       body: CustomScrollView(
         slivers: [
@@ -116,6 +116,33 @@ class ProductDetailScreen extends StatelessWidget {
                   _SellerRow(ownerId: product.ownerId!),
                 ],
                 const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: qty == 0
+                      ? ElevatedButton(
+                          onPressed: () {
+                            cart.add(product.id);
+                            showAddedToCartPopup(context, strings.addedToCartMessage(product.name(lang)));
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.green,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            elevation: 0,
+                          ),
+                          child: Text(strings.addToCart,
+                              style: AppTextStyles.body(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
+                        )
+                      : Center(
+                          child: _QtyStepperLarge(
+                            qty: qty,
+                            onIncrement: () => cart.increment(product.id),
+                            onDecrement: () => cart.decrement(product.id),
+                          ),
+                        ),
+                ),
+                const SizedBox(height: 28),
                 _ReviewsSection(productId: product.id, strings: strings),
                 if (similar.isNotEmpty) ...[
                   const SizedBox(height: 32),
@@ -150,19 +177,13 @@ class ProductDetailScreen extends StatelessWidget {
 /// of burying the action button mid-page where it scrolls out of view.
 class _BottomActionBar extends StatelessWidget {
   final Product product;
-  final int qty;
   final AppStrings strings;
-  final VoidCallback onAdd;
-  final VoidCallback onIncrement;
-  final VoidCallback onDecrement;
+  final VoidCallback onPlaceOrder;
 
   const _BottomActionBar({
     required this.product,
-    required this.qty,
     required this.strings,
-    required this.onAdd,
-    required this.onIncrement,
-    required this.onDecrement,
+    required this.onPlaceOrder,
   });
 
   @override
@@ -192,20 +213,18 @@ class _BottomActionBar extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 16),
-            qty == 0
-                ? ElevatedButton(
-                    onPressed: onAdd,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.green,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      elevation: 0,
-                    ),
-                    child: Text(strings.addToCart,
-                        style: AppTextStyles.body(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
-                  )
-                : _QtyStepperLarge(qty: qty, onIncrement: onIncrement, onDecrement: onDecrement),
+            ElevatedButton(
+              onPressed: onPlaceOrder,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.green,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+              ),
+              child: Text(strings.placeOrderButton,
+                  style: AppTextStyles.body(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
+            ),
           ],
         ),
       ),
