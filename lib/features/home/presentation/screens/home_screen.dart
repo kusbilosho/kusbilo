@@ -5,6 +5,7 @@ import '../../../../core/localization/app_strings.dart';
 import '../../../../core/localization/locale_provider.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../../core/widgets/added_to_cart_popup.dart';
 import '../../../../core/widgets/haat_badge.dart';
 import '../../../../core/widgets/lang_toggle.dart';
 import '../../../../core/widgets/shimmer_loading.dart';
@@ -1178,6 +1179,12 @@ class _CategoryGridTile extends StatelessWidget {
 
 /// Product card used on Home and Category grids. Shows an Add button when
 /// the product isn't in the cart yet, and a +/- stepper once it is.
+/// Public constructor for [_ProductCard] so other screens (e.g. the
+/// seller storefront grid) can reuse the exact same product tile —
+/// image, name, price, add/qty-stepper — without duplicating it.
+Widget buildProductCard(BuildContext context, Product product, AppLanguage lang, String addLabel) =>
+    _ProductCard(product: product, lang: lang, addLabel: addLabel);
+
 class _ProductCard extends StatelessWidget {
   final Product product;
   final AppLanguage lang;
@@ -1279,7 +1286,11 @@ class _ProductCard extends StatelessWidget {
             width: double.infinity,
             child: qty == 0
                 ? OutlinedButton(
-                    onPressed: () => context.read<CartProvider>().add(product.id),
+                    onPressed: () {
+                      context.read<CartProvider>().add(product.id);
+                      final strings = context.read<LocaleProvider>().strings;
+                      showAddedToCartPopup(context, strings.addedToCartMessage(product.name(lang)));
+                    },
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.green,
                       side: const BorderSide(color: AppColors.green, width: 1.4),
