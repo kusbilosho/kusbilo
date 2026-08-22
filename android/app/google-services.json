@@ -176,6 +176,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "90426342126-qet19gspermium6ck9bqru1d4v8n5fv7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.kusbilo",
+            "certificate_hash": "83997721d37787ad8e724aa5eb358f3eb13335bb"
+          }
+        },
+        {
           "client_id": "90426342126-7tgn7r7dq4ka6glnafmdc6bd5k1j14hn.apps.googleusercontent.com",
           "client_type": 3
         }
