@@ -447,6 +447,19 @@ class _CategoryPreviewCard extends StatelessWidget {
                                       color: Colors.white,
                                       child: p.imageUrl != null && p.imageUrl!.isNotEmpty
                                           ? Image.network(p.imageUrl!, fit: BoxFit.cover,
+                                              loadingBuilder: (context, child, progress) {
+                                                if (progress == null) return child;
+                                                // Same shimmer sweep as the
+                                                // product cards, so each of
+                                                // these 2x2 thumbnails keeps
+                                                // shimmering individually
+                                                // while its own bytes are
+                                                // still downloading, instead
+                                                // of sitting blank/white.
+                                                return AppShimmer(
+                                                  child: ShimmerBox(height: double.infinity, radius: 8),
+                                                );
+                                              },
                                               errorBuilder: (_, __, ___) => Center(
                                                   child: Text(p.emoji.isNotEmpty ? p.emoji : '🛒',
                                                       style: const TextStyle(fontSize: 16))))
