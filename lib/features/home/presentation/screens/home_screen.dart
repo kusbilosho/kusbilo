@@ -1235,16 +1235,17 @@ class _ProductCard extends StatelessWidget {
                                 height: double.infinity,
                                 loadingBuilder: (context, child, progress) {
                                   if (progress == null) return child;
-                                  // Soft pulsing placeholder instead of a
-                                  // blank box while the image streams in.
-                                  return TweenAnimationBuilder<double>(
-                                    tween: Tween(begin: 0.4, end: 1.0),
-                                    duration: const Duration(milliseconds: 700),
-                                    curve: Curves.easeInOut,
-                                    builder: (context, value, _) => Opacity(
-                                      opacity: value,
-                                      child: Icon(Icons.image_outlined, color: AppColors.inactive, size: 32),
-                                    ),
+                                  // Keep the same shimmer sweep running for
+                                  // this card's own image while its bytes
+                                  // are still downloading — the outer grid
+                                  // skeleton (HomeTabSkeleton) only covers
+                                  // the gap until product *data* arrives,
+                                  // so without this the shimmer effect
+                                  // visually stops the moment the grid
+                                  // renders, well before each image has
+                                  // actually finished loading.
+                                  return AppShimmer(
+                                    child: ShimmerBox(height: double.infinity, radius: 10),
                                   );
                                 },
                                 errorBuilder: (_, __, ___) =>
