@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -16,6 +18,7 @@ import '../../data/models/category.dart';
 import '../../data/models/product.dart';
 import '../../../order/presentation/screens/order_history_screen.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/widgets/static_info_screen.dart';
 import '../../../addresses/presentation/providers/addresses_provider.dart';
@@ -220,6 +223,9 @@ class _HomeTab extends StatefulWidget {
 // notifyListeners(), no matter what.
 class _HomeTabState extends State<_HomeTab> {
   CatalogProvider? _catalog;
+  // Guards the one-time mic-intro popup below so it's only ever
+  // scheduled once per widget lifetime, not on every rebuild.
+  bool _introChecked = false;
 
   @override
   void didChangeDependencies() {
@@ -256,6 +262,16 @@ class _HomeTabState extends State<_HomeTab> {
     }
 
     final featured = catalog.products.take(6).toList();
+
+    // Fires once per install, the very first time Home actually has data
+    // on screen — not on the skeleton, and not again on later rebuilds.
+    // This is what tells a first-time user the mic isn't the generic
+    // voice-search icon every other shopping app has — it's a real
+    // live-call ordering feature.
+    if (!_introChecked) {
+      _introChecked = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowMicIntro(context));
+    }
 
     return CustomScrollView(
       slivers: [
@@ -400,6 +416,103 @@ class _HomeTabState extends State<_HomeTab> {
 
   void _openCategory(BuildContext context, Category cat) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => _CategoryDetailScreen(category: cat)));
+  }
+}
+
+/// One-time, first-app-open popup that explains what the mic in the
+/// search bar actually does. Without this, the mic just looks like the
+/// generic voice-search icon every other shopping app already has, so
+/// people never tap it to find out — this makes sure at least the very
+/// first session tells them it's a real live-call ordering feature.
+/// Purely informational: no forced action. It closes itself after a few
+/// seconds, and there's also an explicit cross to dismiss it right away.
+/// Shown at most once per device, tracked via SharedPreferences so it
+/// survives app restarts (not just this session).
+Future<void> _maybeShowMicIntro(BuildContext context) async {
+  final prefs = await SharedPreferences.getInstance();
+  if (prefs.getBool('mic_intro_shown') ?? false) return;
+  await prefs.setBool('mic_intro_shown', true);
+  if (!context.mounted) return;
+
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    builder: (_) => const _MicIntroSheet(),
+  );
+}
+
+class _MicIntroSheet extends StatefulWidget {
+  const _MicIntroSheet();
+
+  @override
+  State<_MicIntroSheet> createState() => _MicIntroSheetState();
+}
+
+class _MicIntroSheetState extends State<_MicIntroSheet> {
+  Timer? _autoCloseTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-dismisses on its own after 6 seconds so it never blocks
+    // someone who's already moved on — the cross below handles anyone
+    // who wants to close it sooner.
+    _autoCloseTimer = Timer(const Duration(seconds: 6), () {
+      if (mounted) Navigator.of(context).maybePop();
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoCloseTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Container(
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: const BoxDecoration(color: AppColors.sage, shape: BoxShape.circle),
+                  child: const Icon(Icons.mic, color: AppColors.green, size: 26),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () => Navigator.of(context).maybePop(),
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: const BoxDecoration(color: AppColors.cream, shape: BoxShape.circle),
+                    child: const Icon(Icons.close_rounded, size: 18, color: AppColors.muted),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Text('नया फीचर — बोलकर ऑर्डर करें! 🎉', style: AppTextStyles.display(fontSize: 17)),
+            const SizedBox(height: 8),
+            Text(
+              'ऊपर सर्च बार में जो mic दिख रहा है वो टाइपिंग वाला वॉइस-सर्च नहीं है — उस पर टैप करके सीधे किसी से बात करके अपना पूरा ऑर्डर बता दीजिए, बस!',
+              style: AppTextStyles.caption(fontSize: 13, color: AppColors.mutedDark),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -863,9 +976,54 @@ class _QtyStepper extends StatelessWidget {
   }
 }
 
-class _SearchBar extends StatelessWidget {
+/// Search bar with a pulsing "NEW" badge on the mic icon. Without the
+/// badge the mic reads as generic voice-search (which every shopping app
+/// already has, so people skip it) — the badge keeps signaling "this one
+/// is different" until the person has actually opened the live-call sheet
+/// at least once, tracked in SharedPreferences so it persists across app
+/// restarts, not just this session.
+class _SearchBar extends StatefulWidget {
   final String hint;
   const _SearchBar({required this.hint});
+
+  @override
+  State<_SearchBar> createState() => _SearchBarState();
+}
+
+class _SearchBarState extends State<_SearchBar> with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseController;
+  bool _liveCallTried = false;
+  bool _prefsLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))
+      ..repeat(reverse: true);
+    _loadPrefs();
+  }
+
+  Future<void> _loadPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _liveCallTried = prefs.getBool('live_call_tried') ?? false;
+      _prefsLoaded = true;
+    });
+  }
+
+  Future<void> _onMicTap() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('live_call_tried', true);
+    if (mounted) setState(() => _liveCallTried = true);
+    if (context.mounted) showLiveCallSheet(context);
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -890,7 +1048,7 @@ class _SearchBar extends StatelessWidget {
                   decoration: InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
-                    hintText: hint,
+                    hintText: widget.hint,
                     hintStyle: AppTextStyles.caption(fontSize: 13),
                   ),
                 ),
@@ -900,11 +1058,37 @@ class _SearchBar extends StatelessWidget {
           // Voice ordering entry point — placed right in the search bar
           // since typing is the exact barrier this is meant to remove.
           GestureDetector(
-            onTap: () => showLiveCallSheet(context),
-            child: Container(
-              padding: const EdgeInsets.all(6),
-              decoration: const BoxDecoration(color: AppColors.sage, shape: BoxShape.circle),
-              child: const Icon(Icons.mic, size: 18, color: AppColors.green),
+            onTap: _onMicTap,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: const BoxDecoration(color: AppColors.sage, shape: BoxShape.circle),
+                  child: const Icon(Icons.mic, size: 18, color: AppColors.green),
+                ),
+                if (_prefsLoaded && !_liveCallTried)
+                  Positioned(
+                    top: -9,
+                    right: -12,
+                    child: AnimatedBuilder(
+                      animation: _pulseController,
+                      builder: (context, child) => Transform.scale(
+                        scale: 0.9 + (_pulseController.value * 0.15),
+                        child: child,
+                      ),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppColors.mustard,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text('NEW',
+                            style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: Colors.white)),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
