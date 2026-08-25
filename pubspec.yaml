@@ -36,6 +36,10 @@ dependencies:
   # Play Store link.
   url_launcher: ^6.3.1
   package_info_plus: ^8.1.1
+  # Persists tiny local flags across app restarts (e.g. "has the user
+  # seen/tried the live-call mic feature yet") — no Firestore round trip
+  # needed for something this small and per-device.
+  shared_preferences: ^2.3.2
 
   # Real-time voice conversation — Gemini Live API over a direct
   # WebSocket (same protocol DevMate AI uses). The API key is set once
