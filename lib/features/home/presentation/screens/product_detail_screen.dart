@@ -12,6 +12,7 @@ import '../../../favorites/presentation/providers/favorites_provider.dart';
 import '../../data/catalog_provider.dart';
 import '../../data/models/product.dart';
 import '../../data/models/review.dart';
+import '../widgets/product_image_gallery.dart';
 import 'seller_products_screen.dart';
 
 /// Full product page — big photo, description, tags, who's selling it,
@@ -56,7 +57,7 @@ class ProductDetailScreen extends StatelessWidget {
           SliverAppBar(
             backgroundColor: Colors.white,
             pinned: true,
-            expandedHeight: 260,
+            expandedHeight: 320,
             iconTheme: const IconThemeData(color: AppColors.charcoal),
             actions: [
               IconButton(
@@ -68,16 +69,10 @@ class ProductDetailScreen extends StatelessWidget {
               ),
             ],
             flexibleSpace: FlexibleSpaceBar(
-              background: Container(
-                color: AppColors.sage,
-                child: product.imageUrl != null
-                    ? Image.network(
-                        product.imageUrl!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) =>
-                            Center(child: Text(product.emoji, style: const TextStyle(fontSize: 90))),
-                      )
-                    : Center(child: Text(product.emoji, style: const TextStyle(fontSize: 90))),
+              background: ProductImageGallery(
+                imageUrls: product.imageUrls,
+                emoji: product.emoji,
+                height: 320,
               ),
             ),
           ),
@@ -94,23 +89,14 @@ class ProductDetailScreen extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(product.description, style: AppTextStyles.caption(fontSize: 13, color: AppColors.mutedDark)),
                 ],
-                if (product.tags.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: product.tags
-                        .map((t) => Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: AppColors.sage,
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text(t, style: AppTextStyles.caption(fontSize: 11, color: AppColors.green)),
-                            ))
-                        .toList(),
-                  ),
-                ],
+                // `product.tags` is intentionally NOT rendered here anymore.
+                // It's SEO/search keywords the seller types in (e.g. "tshirt,
+                // tee, टीशर्ट, t-shirt, casual wear") — great for matching
+                // what a buyer searches or says out loud (see
+                // Product.searchableText / the voice search), but showing
+                // them as chips on the page just repeats the product name
+                // in a messier form. Kept in the data model and used for
+                // search; just not displayed here.
                 if (product.ownerId != null) ...[
                   const SizedBox(height: 16),
                   _SellerRow(ownerId: product.ownerId!),
