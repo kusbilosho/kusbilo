@@ -311,7 +311,7 @@ class _TrackingMapState extends State<_TrackingMap> {
           children: [
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.kusbilo.app',
+              userAgentPackageName: 'com.kusbilo',
             ),
             MarkerLayer(
               markers: [
