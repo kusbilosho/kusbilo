@@ -447,19 +447,6 @@ class _CategoryPreviewCard extends StatelessWidget {
                                       color: Colors.white,
                                       child: p.imageUrl != null && p.imageUrl!.isNotEmpty
                                           ? Image.network(p.imageUrl!, fit: BoxFit.cover,
-                                              loadingBuilder: (context, child, progress) {
-                                                if (progress == null) return child;
-                                                // Same shimmer sweep as the
-                                                // product cards, so each of
-                                                // these 2x2 thumbnails keeps
-                                                // shimmering individually
-                                                // while its own bytes are
-                                                // still downloading, instead
-                                                // of sitting blank/white.
-                                                return AppShimmer(
-                                                  child: ShimmerBox(height: double.infinity, radius: 8),
-                                                );
-                                              },
                                               errorBuilder: (_, __, ___) => Center(
                                                   child: Text(p.emoji.isNotEmpty ? p.emoji : '🛒',
                                                       style: const TextStyle(fontSize: 16))))
@@ -1248,17 +1235,16 @@ class _ProductCard extends StatelessWidget {
                                 height: double.infinity,
                                 loadingBuilder: (context, child, progress) {
                                   if (progress == null) return child;
-                                  // Keep the same shimmer sweep running for
-                                  // this card's own image while its bytes
-                                  // are still downloading — the outer grid
-                                  // skeleton (HomeTabSkeleton) only covers
-                                  // the gap until product *data* arrives,
-                                  // so without this the shimmer effect
-                                  // visually stops the moment the grid
-                                  // renders, well before each image has
-                                  // actually finished loading.
-                                  return AppShimmer(
-                                    child: ShimmerBox(height: double.infinity, radius: 10),
+                                  // Soft pulsing placeholder instead of a
+                                  // blank box while the image streams in.
+                                  return TweenAnimationBuilder<double>(
+                                    tween: Tween(begin: 0.4, end: 1.0),
+                                    duration: const Duration(milliseconds: 700),
+                                    curve: Curves.easeInOut,
+                                    builder: (context, value, _) => Opacity(
+                                      opacity: value,
+                                      child: Icon(Icons.image_outlined, color: AppColors.inactive, size: 32),
+                                    ),
                                   );
                                 },
                                 errorBuilder: (_, __, ___) =>
@@ -1449,7 +1435,7 @@ class _ProfileTab extends StatelessWidget {
                                 StaticInfoSection(
                                   actionIcon: Icons.email,
                                   actionLabel: strings.emailUsButton,
-                                  onAction: () => launchUrl(Uri.parse('mailto:support@kusbilo.app')),
+                                  onAction: () => launchUrl(Uri.parse('mailto:support@kusbilo.in')),
                                 ),
                               ],
                             )))),
@@ -1472,6 +1458,14 @@ class _ProfileTab extends StatelessWidget {
                         builder: (_) => StaticInfoScreen(
                               title: strings.termsOfServiceTitle,
                               sections: strings.termsOfServiceSections
+                                  .map((s) => StaticInfoSection(heading: s.$1, body: s.$2))
+                                  .toList(),
+                            )))),
+                _MenuRowData(Icons.replay_circle_filled_outlined, strings.refundPolicyTitle, AppColors.muted,
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => StaticInfoScreen(
+                              title: strings.refundPolicyTitle,
+                              sections: strings.refundPolicySections
                                   .map((s) => StaticInfoSection(heading: s.$1, body: s.$2))
                                   .toList(),
                             )))),
