@@ -27,7 +27,7 @@ class AppStrings {
   String get continueButton => _isHindi ? 'आगे बढ़ें' : 'Continue';
 
   String get termsPrefix =>
-      _isHindi ? 'जारी रखकर आप गाँवहाट की' : "By continuing, you agree to Kusbilo's";
+      _isHindi ? 'जारी रखकर आप कुसबिलो की' : "By continuing, you agree to Kusbilo's";
 
   String get termsOfService => _isHindi ? 'नियम व शर्तों' : 'Terms of Service';
 
@@ -642,8 +642,8 @@ class AppStrings {
       : "Have a question or facing an issue? We're here to help.";
 
   String get aboutUsBody => _isHindi
-      ? 'गाँवहाट एक ऐसा बाज़ार है जो आपके गाँव के दुकानदारों और खरीदारों को सीधे जोड़ता है — बिना किसी बिचौलिए के। स्थानीय उत्पाद, आवाज़ से ऑर्डर, और आपकी अपनी भाषा में — यह सब आपके गाँव को थोड़ा आसान बनाने के लिए बनाया गया है।'
-      : "Kusbilo is a marketplace that connects your village's shopkeepers directly with buyers — no middleman. Local products, voice ordering, and your own language — all built to make your village a little easier.";
+      ? 'कुसबिलो एक ऐसा बाज़ार है जो पूरे भारत के दुकानदारों और खरीदारों को सीधे जोड़ता है — बिना किसी बिचौलिए के। स्थानीय उत्पाद, आवाज़ से ऑर्डर, और आपकी अपनी भाषा में — यह सब खरीदारी को थोड़ा आसान बनाने के लिए बनाया गया है।'
+      : "Kusbilo is a marketplace that connects local shopkeepers directly with buyers across India — no middleman. Local products, voice ordering, and your own language — all built to make shopping a little easier, wherever you are.";
 
   String get privacyPolicyTitle => _isHindi ? 'गोपनीयता नीति' : 'Privacy Policy';
 
@@ -681,7 +681,7 @@ class AppStrings {
           ),
           (
             'संपर्क करें',
-            'सवाल या शिकायत के लिए: support@kusbilo.app',
+            'सवाल या शिकायत के लिए: support@kusbilo.in',
           ),
         ]
       : [
@@ -711,7 +711,7 @@ class AppStrings {
           ),
           (
             'Contact us',
-            'For questions or complaints: support@kusbilo.app',
+            'For questions or complaints: support@kusbilo.in',
           ),
         ];
 
@@ -723,7 +723,7 @@ class AppStrings {
           ),
           (
             'भुगतान',
-            'अभी सिर्फ Cash on Delivery (डिलीवरी पर नकद भुगतान) उपलब्ध है। सामान मिलने पर पूरी राशि नकद में देनी होगी।',
+            'ऑर्डर के लिए UPI (ऑनलाइन) या Cash on Delivery (डिलीवरी पर नकद) — दोनों में से कोई भी तरीका चुन सकते हैं। UPI भुगतान हमारे भुगतान पार्टनर के ज़रिए सुरक्षित तरीके से प्रोसेस होता है।',
           ),
           (
             'डिलीवरी का समय',
@@ -731,7 +731,11 @@ class AppStrings {
           ),
           (
             'ऑर्डर रद्द करना',
-            'फ़िलहाल ऐप के अंदर से ऑर्डर रद्द करने की सुविधा नहीं है। ऑर्डर रद्द करने के लिए कृपया सीधे विक्रेता या हमारे सपोर्ट से संपर्क करें।',
+            'जब तक विक्रेता ने ऑर्डर तैयार करना शुरू नहीं किया है, तब तक आप ऐप के अंदर से ही ऑर्डर मुफ़्त में रद्द कर सकते हैं (ऑर्डर ट्रैकिंग स्क्रीन से)। तैयार होना शुरू हो जाने के बाद रद्द करना संभव नहीं होगा — ऐसे में कृपया सीधे विक्रेता या हमारे सपोर्ट से संपर्क करें।',
+          ),
+          (
+            'रिफंड और रिप्लेसमेंट',
+            'हर प्रोडक्ट पेज पर उसकी रिप्लेसमेंट विंडो (जैसे सब्ज़ी-फल के लिए 48 घंटे, बाकी सामान के लिए 72 घंटे) दिखाई जाती है। पूरी जानकारी के लिए हमारी रिफंड पॉलिसी देखें।',
           ),
           (
             'विक्रेता की ज़िम्मेदारी',
@@ -747,7 +751,7 @@ class AppStrings {
           ),
           (
             'संपर्क करें',
-            'सवाल या शिकायत के लिए: support@kusbilo.app',
+            'सवाल या शिकायत के लिए: support@kusbilo.in',
           ),
         ]
       : [
@@ -757,7 +761,7 @@ class AppStrings {
           ),
           (
             'Payment',
-            'Only Cash on Delivery is currently available. The full amount must be paid in cash when the order arrives.',
+            'You can pay via UPI (online) or Cash on Delivery — whichever you prefer. UPI payments are processed securely through our payment partner.',
           ),
           (
             'Delivery time',
@@ -765,7 +769,11 @@ class AppStrings {
           ),
           (
             'Cancelling an order',
-            'In-app order cancellation isn\'t available yet. To cancel an order, please contact the seller or our support directly.',
+            'You can cancel an order for free from within the app (on the order tracking screen) as long as the seller hasn\'t started preparing it yet. Once preparation has begun, cancellation isn\'t possible — please contact the seller or our support directly instead.',
+          ),
+          (
+            'Refunds & replacements',
+            'Every product page shows its replacement window (e.g. 48 hours for fruits & vegetables, 72 hours for other items). See our Refund Policy for full details.',
           ),
           (
             'Seller responsibility',
@@ -781,12 +789,84 @@ class AppStrings {
           ),
           (
             'Contact us',
-            'For questions or complaints: support@kusbilo.app',
+            'For questions or complaints: support@kusbilo.in',
+          ),
+        ];
+
+  String get refundPolicyTitle => _isHindi ? 'रिफंड और रिप्लेसमेंट पॉलिसी' : 'Refund & Replacement Policy';
+
+  List<(String?, String)> get refundPolicySections => _isHindi
+      ? [
+          (
+            null,
+            'हम चाहते हैं कि आप Kusbilo पर बेझिझक ऑर्डर करें। यह पॉलिसी बताती है कि आप कब ऑर्डर रद्द कर सकते हैं, रिप्लेसमेंट माँग सकते हैं, या रिफंड पा सकते हैं।',
+          ),
+          (
+            'ऑर्डर रद्द करना',
+            'जब तक विक्रेता ने तैयारी शुरू नहीं की है, तब तक ऑर्डर मुफ़्त में रद्द किया जा सकता है। ऑनलाइन भुगतान किया हो और तैयारी शुरू होने से पहले रद्द कर दिया हो, तो पूरा पैसा वापस मिलेगा।',
+          ),
+          (
+            'रिप्लेसमेंट विंडो',
+            'हर प्रोडक्ट पेज पर उसकी रिप्लेसमेंट विंडो दिखाई जाती है:\n• सब्ज़ी-फल, डेयरी जैसे जल्दी खराब होने वाले सामान: डिलीवरी के 48 घंटे तक\n• बाकी सभी सामान (पैकेज्ड, कपड़े, घरेलू सामान आदि): डिलीवरी के 72 घंटे तक',
+          ),
+          (
+            'रिप्लेसमेंट के लिए योग्य',
+            '• मिला हुआ सामान टूटा-फूटा, खराब, या ऑर्डर से अलग हो\n• ऑर्डर में से कोई सामान गायब हो\n• गलत सामान या गलत मात्रा डिलीवर हुई हो\n• सामान एक्सपायर या इस्तेमाल के लायक न हो',
+          ),
+          (
+            'रिप्लेसमेंट के लिए अयोग्य',
+            '• रिप्लेसमेंट विंडो खत्म होने के बाद की गई माँग\n• डिलीवरी के बाद सिर्फ मन बदलने पर\n• ताज़ी सब्ज़ी-फल में सामान्य अंतर (आकार, रंग)\n• डिलीवरी सही हालत में लेने के बाद हुआ नुकसान',
+          ),
+          (
+            'कैसे माँगें',
+            '"मेरे ऑर्डर" में जाकर संबंधित ऑर्डर खोलें और समस्या बताएं, या नीचे दिए संपर्क पर लिखें। संभव हो तो फ़ोटो ज़रूर भेजें — इससे जल्दी समाधान मिलता है। हम हर माँग का जवाब 24 घंटे में देने की कोशिश करते हैं।',
+          ),
+          (
+            'रिफंड कैसे मिलेगा',
+            'स्वीकृत रिफंड आपके मूल भुगतान तरीके (UPI/कार्ड) में 5-7 कार्य दिवसों में वापस आ जाता है। Cash on Delivery ऑर्डर के लिए, रिफंड बैंक ट्रांसफर के ज़रिए किया जाता है।',
+          ),
+          (
+            'संपर्क करें',
+            'ऑर्डर से जुड़ी किसी भी मदद के लिए: support@kusbilo.in (ऑर्डर नंबर ज़रूर बताएं)',
+          ),
+        ]
+      : [
+          (
+            null,
+            'We want you to order on Kusbilo with confidence. This policy explains when you can cancel an order, request a replacement, or get a refund.',
+          ),
+          (
+            'Cancelling an order',
+            'You can cancel for free as long as the seller hasn\'t started preparing it yet. If you paid online and cancel before preparation starts, you get a full refund.',
+          ),
+          (
+            'Replacement window',
+            'Every product page shows its replacement window:\n• Perishables (fruits, vegetables, dairy): 48 hours from delivery\n• All other items (packaged goods, clothing, household items, etc.): 72 hours from delivery',
+          ),
+          (
+            'What\'s eligible for replacement',
+            '• The item is damaged, spoiled, or different from what was ordered\n• An item is missing from your order\n• The wrong item or quantity was delivered\n• The item is expired or unsafe to use',
+          ),
+          (
+            'What\'s not eligible',
+            '• Requests made after the replacement window has closed\n• Change of mind after delivery\n• Normal variation in fresh produce (size, colour)\n• Damage caused after accepting delivery in good condition',
+          ),
+          (
+            'How to request',
+            'Open the order under "My Orders" and report the issue, or write to us at the contact below. Include a photo where possible — it helps us resolve it faster. We aim to respond within 24 hours.',
+          ),
+          (
+            'How refunds are issued',
+            'Approved refunds go back to your original payment method (UPI/card) within 5–7 business days. For Cash on Delivery orders, refunds are issued via bank transfer.',
+          ),
+          (
+            'Contact us',
+            'For help with any order: support@kusbilo.in (please include your order ID)',
           ),
         ];
 
   String get rateAppBody => _isHindi
-      ? 'अगर आपको गाँवहाट पसंद आया, तो कृपया इसे रेट करें — इससे और लोगों तक पहुँचने में मदद मिलती है।'
+      ? 'अगर आपको कुसबिलो पसंद आया, तो कृपया इसे रेट करें — इससे और लोगों तक पहुँचने में मदद मिलती है।'
       : 'If you enjoy Kusbilo, please rate it — it helps more people discover the app.';
 
   String get rateAppButton => _isHindi ? 'अभी रेट करें' : 'Rate now';
