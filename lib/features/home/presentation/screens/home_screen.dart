@@ -447,6 +447,12 @@ class _CategoryPreviewCard extends StatelessWidget {
                                       color: Colors.white,
                                       child: p.imageUrl != null && p.imageUrl!.isNotEmpty
                                           ? Image.network(p.imageUrl!, fit: BoxFit.cover,
+                                              loadingBuilder: (context, child, progress) {
+                                                if (progress == null) return child;
+                                                return AppShimmer(
+                                                  child: ShimmerBox(height: double.infinity, radius: 8),
+                                                );
+                                              },
                                               errorBuilder: (_, __, ___) => Center(
                                                   child: Text(p.emoji.isNotEmpty ? p.emoji : '🛒',
                                                       style: const TextStyle(fontSize: 16))))
@@ -1083,6 +1089,10 @@ class _CategoryCircle extends StatelessWidget {
                         width: 56,
                         height: 56,
                         fit: BoxFit.cover,
+                        loadingBuilder: (context, child, progress) {
+                          if (progress == null) return child;
+                          return AppShimmer(child: ShimmerCircle(size: 56));
+                        },
                         errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 26),
                       ),
                     ),
@@ -1152,6 +1162,10 @@ class _CategoryGridTile extends StatelessWidget {
                           width: 64,
                           height: 64,
                           fit: BoxFit.cover,
+                          loadingBuilder: (context, child, progress) {
+                            if (progress == null) return child;
+                            return AppShimmer(child: ShimmerCircle(size: 64));
+                          },
                           errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 28),
                         ),
                       ),
@@ -1235,16 +1249,8 @@ class _ProductCard extends StatelessWidget {
                                 height: double.infinity,
                                 loadingBuilder: (context, child, progress) {
                                   if (progress == null) return child;
-                                  // Soft pulsing placeholder instead of a
-                                  // blank box while the image streams in.
-                                  return TweenAnimationBuilder<double>(
-                                    tween: Tween(begin: 0.4, end: 1.0),
-                                    duration: const Duration(milliseconds: 700),
-                                    curve: Curves.easeInOut,
-                                    builder: (context, value, _) => Opacity(
-                                      opacity: value,
-                                      child: Icon(Icons.image_outlined, color: AppColors.inactive, size: 32),
-                                    ),
+                                  return AppShimmer(
+                                    child: ShimmerBox(height: double.infinity, radius: 10),
                                   );
                                 },
                                 errorBuilder: (_, __, ___) =>
