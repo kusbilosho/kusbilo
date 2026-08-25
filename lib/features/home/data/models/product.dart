@@ -20,7 +20,10 @@ class Product {
   final String? ownerId;
   final String description;
   final List<String> tags;
-  final String? imageUrl;
+  /// All photos the seller uploaded for this product, in the order
+  /// they should appear in the gallery. A seller can add as many as
+  /// they want — nothing in this model caps the count.
+  final List<String> imageUrls;
   final int stock;
   final bool isActive;
 
@@ -35,7 +38,7 @@ class Product {
     this.ownerId,
     this.description = '',
     this.tags = const [],
-    this.imageUrl,
+    this.imageUrls = const [],
     this.stock = 0,
     this.isActive = true,
   });
@@ -43,6 +46,12 @@ class Product {
   String name(AppLanguage language) => language == AppLanguage.hindi ? nameHi : nameEn;
 
   String get priceDisplay => '₹$priceValue$unit';
+
+  /// Convenience accessor so every screen that only ever needed "the"
+  /// product photo (grid cards, similar-products strip) keeps working
+  /// unchanged — it's just the first image of the gallery, or null if
+  /// the seller hasn't uploaded any yet.
+  String? get imageUrl => imageUrls.isNotEmpty ? imageUrls.first : null;
 
   /// Text a voice/search match should be scored against — name, tags,
   /// and description all count, since a seller's own words ("देसी आलू,
@@ -60,7 +69,11 @@ class Product {
         'ownerId': ownerId,
         'description': description,
         'tags': tags,
+        // 'imageUrl' (singular) kept alongside the list purely so any
+        // older client/merchant build that still reads only that field
+        // doesn't suddenly see a product with no photo.
         'imageUrl': imageUrl,
+        'imageUrls': imageUrls,
         'stock': stock,
         'isActive': isActive,
       };
@@ -76,7 +89,11 @@ class Product {
         ownerId: map['ownerId'] as String?,
         description: map['description'] as String? ?? '',
         tags: (map['tags'] as List<dynamic>? ?? []).map((t) => t.toString()).toList(),
-        imageUrl: map['imageUrl'] as String?,
+        // Prefer the new 'imageUrls' list; fall back to the old single
+        // 'imageUrl' field for products saved before this change so
+        // nothing already listed loses its photo.
+        imageUrls: (map['imageUrls'] as List<dynamic>?)?.map((u) => u.toString()).toList() ??
+            ((map['imageUrl'] as String?)?.isNotEmpty == true ? [map['imageUrl'] as String] : const []),
         stock: (map['stock'] as num?)?.toInt() ?? 0,
         isActive: map['isActive'] as bool? ?? true,
       );
@@ -89,7 +106,7 @@ class Product {
     String? unit,
     String? description,
     List<String>? tags,
-    String? imageUrl,
+    List<String>? imageUrls,
     int? stock,
     bool? isActive,
   }) =>
@@ -104,7 +121,7 @@ class Product {
         ownerId: ownerId,
         description: description ?? this.description,
         tags: tags ?? this.tags,
-        imageUrl: imageUrl ?? this.imageUrl,
+        imageUrls: imageUrls ?? this.imageUrls,
         stock: stock ?? this.stock,
         isActive: isActive ?? this.isActive,
       );
