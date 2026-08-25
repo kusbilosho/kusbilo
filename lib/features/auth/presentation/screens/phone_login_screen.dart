@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -7,6 +8,7 @@ import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/widgets/haat_badge.dart';
 import '../../../../core/widgets/lang_toggle.dart';
 import '../../../../core/widgets/primary_button.dart';
+import '../../../../core/widgets/static_info_screen.dart';
 import '../providers/auth_flow_provider.dart';
 import 'otp_verification_screen.dart';
 
@@ -122,11 +124,29 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
                     TextSpan(
                       text: strings.termsOfService,
                       style: const TextStyle(color: AppColors.green, fontWeight: FontWeight.w600),
+                      recognizer: TapGestureRecognizer()
+                        ..onTap = () => Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => StaticInfoScreen(
+                                title: strings.termsOfServiceTitle,
+                                sections: strings.termsOfServiceSections
+                                    .map((s) => StaticInfoSection(heading: s.$1, body: s.$2))
+                                    .toList(),
+                              ),
+                            )),
                     ),
                     TextSpan(text: ' ${strings.termsMiddle} '),
                     TextSpan(
                       text: strings.privacyPolicy,
                       style: const TextStyle(color: AppColors.green, fontWeight: FontWeight.w600),
+                      recognizer: TapGestureRecognizer()
+                        ..onTap = () => Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => StaticInfoScreen(
+                                title: strings.privacyPolicyTitle,
+                                sections: strings.privacyPolicySections
+                                    .map((s) => StaticInfoSection(heading: s.$1, body: s.$2))
+                                    .toList(),
+                              ),
+                            )),
                     ),
                     TextSpan(text: ' ${strings.termsSuffix}'),
                   ],
