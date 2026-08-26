@@ -856,8 +856,16 @@ class _CartRow extends StatelessWidget {
           Container(
             width: 52,
             height: 52,
+            clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(color: AppColors.sage, borderRadius: BorderRadius.circular(12)),
-            child: Center(child: Text(product.emoji, style: const TextStyle(fontSize: 26))),
+            child: (product.imageUrl != null && product.imageUrl!.isNotEmpty)
+                ? Image.network(
+                    product.imageUrl!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                        Center(child: Text(product.emoji, style: const TextStyle(fontSize: 26))),
+                  )
+                : Center(child: Text(product.emoji, style: const TextStyle(fontSize: 26))),
           ),
           const SizedBox(width: 12),
           Expanded(
