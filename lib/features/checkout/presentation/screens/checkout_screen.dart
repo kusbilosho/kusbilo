@@ -221,7 +221,20 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                         padding: const EdgeInsets.only(bottom: 10),
                         child: Row(
                           children: [
-                            Text(item.product.emoji, style: const TextStyle(fontSize: 20)),
+                            Container(
+                              width: 34,
+                              height: 34,
+                              clipBehavior: Clip.antiAlias,
+                              decoration: BoxDecoration(color: AppColors.sage, borderRadius: BorderRadius.circular(8)),
+                              child: (item.product.imageUrl != null && item.product.imageUrl!.isNotEmpty)
+                                  ? Image.network(
+                                      item.product.imageUrl!,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) =>
+                                          Center(child: Text(item.product.emoji, style: const TextStyle(fontSize: 18))),
+                                    )
+                                  : Center(child: Text(item.product.emoji, style: const TextStyle(fontSize: 18))),
+                            ),
                             const SizedBox(width: 10),
                             Expanded(
                               child: Text(
