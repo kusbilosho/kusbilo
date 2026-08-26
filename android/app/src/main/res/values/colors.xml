@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#1F5F3F</color>
+    <!-- Same cream used as AppColors.cream in Flutter — keeps the native
+         splash and the first Flutter frame (_StartupSplash in main.dart)
+         visually seamless instead of flashing white-then-cream. -->
+    <color name="splash_background">#FBF7F0</color>
 </resources>
