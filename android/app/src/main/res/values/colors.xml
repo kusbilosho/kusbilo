@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Background for the adaptive app icon (mipmap-anydpi-v26/ic_launcher.xml).
+         This already existed before — matches flutter_launcher_icons'
+         adaptive_icon_background in pubspec.yaml. It got wiped out when
+         this file was replaced to add splash_background below; restored
+         here so the release build (which needs this for the launcher
+         icon) doesn't fail again. -->
+    <color name="ic_launcher_background">#1F5F3F</color>
+
     <!-- Same cream used as AppColors.cream in Flutter — keeps the native
          splash and the first Flutter frame (_StartupSplash in main.dart)
          visually seamless instead of flashing white-then-cream. -->
