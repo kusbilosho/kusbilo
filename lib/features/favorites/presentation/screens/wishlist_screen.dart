@@ -79,7 +79,20 @@ class _WishlistScreenState extends State<WishlistScreen> {
                     ),
                     child: Row(
                       children: [
-                        Text(product.emoji, style: const TextStyle(fontSize: 28)),
+                        Container(
+                          width: 44,
+                          height: 44,
+                          clipBehavior: Clip.antiAlias,
+                          decoration: BoxDecoration(color: AppColors.sage, borderRadius: BorderRadius.circular(10)),
+                          child: (product.imageUrl != null && product.imageUrl!.isNotEmpty)
+                              ? Image.network(
+                                  product.imageUrl!,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) =>
+                                      Center(child: Text(product.emoji, style: const TextStyle(fontSize: 22))),
+                                )
+                              : Center(child: Text(product.emoji, style: const TextStyle(fontSize: 22))),
+                        ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
