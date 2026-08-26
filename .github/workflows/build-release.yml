@@ -19,18 +19,28 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # This is the actual fix for the slow/cancelled build: it caches
+      # ~/.gradle/caches and the Gradle wrapper between runs, so Gradle
+      # doesn't have to re-download and re-resolve every dependency
+      # (geolocator_android, image_picker_android, etc.) from scratch
+      # every single push. First run after adding this is still slow
+      # (nothing cached yet) — every run after that should be much faster.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.38.5'
           channel: 'stable'
+          cache: true
 
       - name: Install dependencies
         run: flutter pub get
 
       - name: Build release APK
         run: flutter build apk --release --split-per-abi
-        
+
       - name: Upload APK as an artifact
         uses: actions/upload-artifact@v4
         with:
