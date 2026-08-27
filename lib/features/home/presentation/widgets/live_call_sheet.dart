@@ -42,6 +42,7 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
   bool _isMuted = false;
   String? _errorText;
   String _captionLine = '';
+  String _userCaptionLine = '';
   bool _ended = false;
   bool _placingOrder = false;
   final List<String> _addedLines = [];
@@ -50,13 +51,27 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
   void initState() {
     super.initState();
     _service.phaseStream.listen((phase) {
-      if (mounted) setState(() => _phase = phase);
+      if (mounted) {
+        setState(() {
+          _phase = phase;
+          // Once the AI actually starts answering, the buyer's own
+          // caption has served its purpose — drop it so the two
+          // captions don't visually collide.
+          if (phase == LiveCallPhase.aiSpeaking) _userCaptionLine = '';
+        });
+      }
     });
     _service.muteStream.listen((muted) {
       if (mounted) setState(() => _isMuted = muted);
     });
     _service.onModelText = (text) {
       if (mounted) setState(() => _captionLine = text);
+    };
+    // Buyer's own words, as heard by the model — cleared the instant
+    // the AI starts replying so it doesn't linger on screen looking
+    // stale next to the AI's own caption.
+    _service.onUserText = (text) {
+      if (mounted) setState(() => _userCaptionLine = text);
     };
     _service.onOrderCall = _handleOrderCall;
     _service.onConfirmOrder = _handleConfirmOrder;
@@ -228,6 +243,26 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
                 const SizedBox(height: 12),
               ],
               _buildStateBody(strings),
+              if (_userCaptionLine.isNotEmpty && _phase == LiveCallPhase.listening) ...[
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.hearing_rounded, size: 14, color: AppColors.green),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        _userCaptionLine,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.body(fontSize: 12, color: AppColors.charcoal, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               if (_captionLine.isNotEmpty && _phase != LiveCallPhase.error) ...[
                 const SizedBox(height: 12),
                 Text(
