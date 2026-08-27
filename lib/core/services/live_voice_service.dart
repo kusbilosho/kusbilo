@@ -132,6 +132,12 @@ class LiveVoiceService {
   /// available — used to show a rough "what it's saying" caption.
   void Function(String text)? onModelText;
 
+  /// Called with a transcript of what the model heard the BUYER say —
+  /// lets the call screen show quick "सुन लिया" style feedback so a
+  /// buyer isn't left wondering whether their voice actually reached
+  /// the model at all.
+  void Function(String text)? onUserText;
+
   /// Called if the session drops or errors for any reason.
   void Function(String error)? onError;
 
@@ -344,6 +350,13 @@ For anything about the app, an order, or a product, answer naturally and helpful
             },
           },
         },
+        // Lets the server send back a transcript of what it heard the
+        // buyer say (handled below as inputTranscription) — without
+        // this, there's no way to show the buyer "haan, sun liya"
+        // confirmation, so any bit of lag makes it feel like their
+        // voice never reached the model at all, even though the audio
+        // was streaming the whole time.
+        'inputAudioTranscription': {},
         'systemInstruction': {
           'parts': [
             {'text': systemPrompt},
@@ -385,11 +398,16 @@ For anything about the app, an order, or a product, answer naturally and helpful
         'realtimeInputConfig': {
           'automaticActivityDetection': {
             'disabled': false,
-            // HIGH here just means "notice the buyer started talking
-            // sooner" — quicker to react at the start of a turn. Kept
-            // endOfSpeechSensitivity at LOW so natural mid-sentence
-            // pauses still don't get mistaken for the buyer finishing.
-            'startOfSpeechSensitivity': 'START_SENSITIVITY_HIGH',
+            // Was START_SENSITIVITY_HIGH — that's what was actually
+            // causing background noise (fan, TV, bazaar sounds) to get
+            // misread as "the buyer started talking", which triggers
+            // activityHandling below and cuts the AI off mid-sentence.
+            // LOW needs a clearer, more speech-like sound before it
+            // decides someone started talking, so stray noise stops
+            // false-triggering barge-in. A real "buyer talked over the
+            // AI" still gets caught fine — that's a much louder,
+            // clearer signal than ambient noise.
+            'startOfSpeechSensitivity': 'START_SENSITIVITY_LOW',
             'endOfSpeechSensitivity': 'END_SENSITIVITY_LOW',
             'prefixPaddingMs': 150,
             'silenceDurationMs': 350,
@@ -568,6 +586,16 @@ For anything about the app, an order, or a product, answer naturally and helpful
     final outputTranscription = serverContent['outputTranscription'] as Map<String, dynamic>?;
     if (outputTranscription != null && outputTranscription['text'] != null) {
       onModelText?.call(outputTranscription['text'] as String);
+    }
+
+    // What the model heard the BUYER say — separate from
+    // outputTranscription above (that's the model's own reply). Surfaced
+    // so the call screen can show "सुन लिया: <text>" the instant it's
+    // heard, instead of the buyer having no idea their voice registered
+    // until the AI actually starts answering a few hundred ms later.
+    final inputTranscription = serverContent['inputTranscription'] as Map<String, dynamic>?;
+    if (inputTranscription != null && inputTranscription['text'] != null) {
+      onUserText?.call(inputTranscription['text'] as String);
     }
 
     final modelTurn = serverContent['modelTurn'] as Map<String, dynamic>?;
