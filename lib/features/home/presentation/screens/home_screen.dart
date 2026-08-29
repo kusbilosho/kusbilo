@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -559,14 +560,12 @@ class _CategoryPreviewCard extends StatelessWidget {
                                     child: Container(
                                       color: Colors.white,
                                       child: p.imageUrl != null && p.imageUrl!.isNotEmpty
-                                          ? Image.network(p.imageUrl!, fit: BoxFit.cover,
-                                              loadingBuilder: (context, child, progress) {
-                                                if (progress == null) return child;
-                                                return AppShimmer(
-                                                  child: ShimmerBox(height: double.infinity, radius: 8),
-                                                );
-                                              },
-                                              errorBuilder: (_, __, ___) => Center(
+                                          ? CachedNetworkImage(
+                                              imageUrl: p.imageUrl!,
+                                              fit: BoxFit.cover,
+                                              placeholder: (context, url) =>
+                                                  AppShimmer(child: ShimmerBox(height: double.infinity, radius: 8)),
+                                              errorWidget: (_, __, ___) => Center(
                                                   child: Text(p.emoji.isNotEmpty ? p.emoji : '🛒',
                                                       style: const TextStyle(fontSize: 16))))
                                           : Center(
@@ -859,10 +858,10 @@ class _CartRow extends StatelessWidget {
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(color: AppColors.sage, borderRadius: BorderRadius.circular(12)),
             child: (product.imageUrl != null && product.imageUrl!.isNotEmpty)
-                ? Image.network(
-                    product.imageUrl!,
+                ? CachedNetworkImage(
+                    imageUrl: product.imageUrl!,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) =>
+                    errorWidget: (_, __, ___) =>
                         Center(child: Text(product.emoji, style: const TextStyle(fontSize: 26))),
                   )
                 : Center(child: Text(product.emoji, style: const TextStyle(fontSize: 26))),
@@ -1276,16 +1275,13 @@ class _CategoryCircle extends StatelessWidget {
                     // the middle of visible white space.
                     child: Transform.scale(
                       scale: 1.35,
-                      child: Image.network(
-                        imageUrl!,
+                      child: CachedNetworkImage(
+                        imageUrl: imageUrl!,
                         width: 56,
                         height: 56,
                         fit: BoxFit.cover,
-                        loadingBuilder: (context, child, progress) {
-                          if (progress == null) return child;
-                          return AppShimmer(child: ShimmerCircle(size: 56));
-                        },
-                        errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 26),
+                        placeholder: (context, url) => AppShimmer(child: ShimmerCircle(size: 56)),
+                        errorWidget: (_, __, ___) => Icon(icon, color: color, size: 26),
                       ),
                     ),
                   )
@@ -1349,16 +1345,13 @@ class _CategoryGridTile extends StatelessWidget {
                       // background the source photo was shot on.
                       child: Transform.scale(
                         scale: 1.35,
-                        child: Image.network(
-                          imageUrl!,
+                        child: CachedNetworkImage(
+                          imageUrl: imageUrl!,
                           width: 64,
                           height: 64,
                           fit: BoxFit.cover,
-                          loadingBuilder: (context, child, progress) {
-                            if (progress == null) return child;
-                            return AppShimmer(child: ShimmerCircle(size: 64));
-                          },
-                          errorBuilder: (_, __, ___) => Icon(icon, color: color, size: 28),
+                          placeholder: (context, url) => AppShimmer(child: ShimmerCircle(size: 64)),
+                          errorWidget: (_, __, ___) => Icon(icon, color: color, size: 28),
                         ),
                       ),
                     )
@@ -1434,18 +1427,15 @@ class _ProductCard extends StatelessWidget {
                       color: AppColors.sage,
                       child: Center(
                         child: product.imageUrl != null && product.imageUrl!.isNotEmpty
-                            ? Image.network(
-                                product.imageUrl!,
+                            ? CachedNetworkImage(
+                                imageUrl: product.imageUrl!,
                                 fit: BoxFit.cover,
                                 width: double.infinity,
                                 height: double.infinity,
-                                loadingBuilder: (context, child, progress) {
-                                  if (progress == null) return child;
-                                  return AppShimmer(
-                                    child: ShimmerBox(height: double.infinity, radius: 10),
-                                  );
-                                },
-                                errorBuilder: (_, __, ___) =>
+                                placeholder: (context, url) => AppShimmer(
+                                  child: ShimmerBox(height: double.infinity, radius: 10),
+                                ),
+                                errorWidget: (_, __, ___) =>
                                     Text(product.emoji.isNotEmpty ? product.emoji : '🛒', style: const TextStyle(fontSize: 40)),
                               )
                             : Text(product.emoji.isNotEmpty ? product.emoji : '🛒', style: const TextStyle(fontSize: 40)),
