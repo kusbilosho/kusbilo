@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../../core/localization/locale_provider.dart';
@@ -52,8 +53,8 @@ class SellerProductsScreen extends StatelessWidget {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(30),
                     child: (photoUrl != null && photoUrl!.isNotEmpty)
-                        ? Image.network(photoUrl!, width: 60, height: 60, fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => _initialCircle(initial))
+                        ? CachedNetworkImage(imageUrl: photoUrl!, width: 60, height: 60, fit: BoxFit.cover,
+                            errorWidget: (_, __, ___) => _initialCircle(initial))
                         : _initialCircle(initial),
                   ),
                   const SizedBox(width: 14),
