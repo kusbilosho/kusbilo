@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../../core/localization/app_strings.dart';
@@ -225,6 +226,7 @@ class _OrderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final statusColor = _statusColor(order.status);
     final itemCount = order.items.fold<int>(0, (sum, i) => sum + i.quantity);
+    final thumbnailUrl = order.items.isNotEmpty ? order.items.first.imageUrl : null;
 
     return Container(
       decoration: BoxDecoration(
@@ -282,9 +284,27 @@ class _OrderCard extends StatelessWidget {
                       width: 44,
                       height: 44,
                       decoration: BoxDecoration(color: AppColors.sage, borderRadius: BorderRadius.circular(12)),
+                      clipBehavior: Clip.antiAlias,
                       child: Stack(
                         children: [
-                          const Center(child: Icon(Icons.shopping_basket_rounded, size: 22, color: AppColors.green)),
+                          // Shows the actual product photo when the order
+                          // has one — previously this was always the same
+                          // generic basket icon for every single order
+                          // regardless of what was in it, so at a glance
+                          // there was no way to tell orders apart or
+                          // recognise "which one was this?" without
+                          // opening each one. Falls back to the icon only
+                          // when there's genuinely no photo to show.
+                          Positioned.fill(
+                            child: (thumbnailUrl != null && thumbnailUrl.isNotEmpty)
+                                ? CachedNetworkImage(
+                                    imageUrl: thumbnailUrl,
+                                    fit: BoxFit.cover,
+                                    errorWidget: (_, __, ___) => const Center(
+                                        child: Icon(Icons.shopping_basket_rounded, size: 22, color: AppColors.green)),
+                                  )
+                                : const Center(child: Icon(Icons.shopping_basket_rounded, size: 22, color: AppColors.green)),
+                          ),
                           Positioned(
                             right: 2,
                             top: 2,
