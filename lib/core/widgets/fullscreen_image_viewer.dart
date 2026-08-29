@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 /// Full-screen photo viewer opened by tapping any product image.
@@ -56,16 +57,15 @@ class _FullscreenImageViewerState extends State<FullscreenImageViewer> {
               minScale: 1,
               maxScale: 5,
               child: Center(
-                child: Image.network(
-                  widget.imageUrls[i],
+                child: CachedNetworkImage(
+                  imageUrl: widget.imageUrls[i],
                   fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => const Icon(
+                  errorWidget: (_, __, ___) => const Icon(
                     Icons.broken_image_outlined,
                     color: Colors.white54,
                     size: 64,
                   ),
-                  loadingBuilder: (context, child, progress) =>
-                      progress == null ? child : const Center(child: CircularProgressIndicator(color: Colors.white)),
+                  placeholder: (_, __) => const Center(child: CircularProgressIndicator(color: Colors.white)),
                 ),
               ),
             ),
