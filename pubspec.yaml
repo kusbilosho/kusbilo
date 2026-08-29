@@ -31,6 +31,14 @@ dependencies:
   firebase_storage: ^13.4.5
   image_picker: ^1.1.2
   firebase_messaging: ^16.4.3
+  # Persists every downloaded product/category photo to disk so it's
+  # only ever fetched over the network once — without this, plain
+  # Image.network re-downloads the same photo from scratch basically
+  # every time its widget remounts (reopening a product, scrolling a
+  # list back into view, restarting the app), which is a real data-cost
+  # problem for buyers on limited mobile data, given these photos change
+  # rarely if ever.
+  cached_network_image: ^3.4.1
 
   # Support contact links (phone/WhatsApp/email) and the "Rate the App"
   # Play Store link.
