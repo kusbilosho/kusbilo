@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/fullscreen_image_viewer.dart';
@@ -57,10 +58,24 @@ class _ProductImageGalleryState extends State<ProductImageGallery> {
               child: Container(
                 color: AppColors.sage,
                 width: double.infinity,
-                child: Image.network(
-                  images[i],
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) =>
+                // BoxFit.contain — a cover fit was cropping the top and
+                // bottom off any photo that isn't roughly square (a
+                // full-length dress/kurta shot, for instance), cutting
+                // out exactly the parts a buyer most needs to see. The
+                // sage background behind it fills in any leftover space
+                // instead of leaving hard white bars.
+                child: CachedNetworkImage(
+                  imageUrl: images[i],
+                  fit: BoxFit.contain,
+                  fadeInDuration: const Duration(milliseconds: 150),
+                  placeholder: (_, __) => const Center(
+                    child: SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.green),
+                    ),
+                  ),
+                  errorWidget: (_, __, ___) =>
                       Center(child: Text(widget.emoji, style: const TextStyle(fontSize: 90))),
                 ),
               ),
