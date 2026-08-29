@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../../core/localization/locale_provider.dart';
@@ -85,10 +86,10 @@ class _WishlistScreenState extends State<WishlistScreen> {
                           clipBehavior: Clip.antiAlias,
                           decoration: BoxDecoration(color: AppColors.sage, borderRadius: BorderRadius.circular(10)),
                           child: (product.imageUrl != null && product.imageUrl!.isNotEmpty)
-                              ? Image.network(
-                                  product.imageUrl!,
+                              ? CachedNetworkImage(
+                                  imageUrl: product.imageUrl!,
                                   fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) =>
+                                  errorWidget: (_, __, ___) =>
                                       Center(child: Text(product.emoji, style: const TextStyle(fontSize: 22))),
                                 )
                               : Center(child: Text(product.emoji, style: const TextStyle(fontSize: 22))),
