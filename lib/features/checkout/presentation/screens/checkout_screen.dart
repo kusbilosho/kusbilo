@@ -92,6 +92,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               priceValue: entry.product!.priceValue,
               unit: entry.product!.unit,
               quantity: entry.qty,
+              imageUrl: entry.product!.imageUrl,
             ))
         .toList();
 
