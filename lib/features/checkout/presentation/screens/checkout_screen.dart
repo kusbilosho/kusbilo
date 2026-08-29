@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../../core/localization/locale_provider.dart';
 import '../../../../core/services/location_service.dart';
 import '../../../../core/services/upi_payment_service.dart';
@@ -227,10 +228,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                               clipBehavior: Clip.antiAlias,
                               decoration: BoxDecoration(color: AppColors.sage, borderRadius: BorderRadius.circular(8)),
                               child: (item.product.imageUrl != null && item.product.imageUrl!.isNotEmpty)
-                                  ? Image.network(
-                                      item.product.imageUrl!,
+                                  ? CachedNetworkImage(
+                                      imageUrl: item.product.imageUrl!,
                                       fit: BoxFit.cover,
-                                      errorBuilder: (_, __, ___) =>
+                                      errorWidget: (_, __, ___) =>
                                           Center(child: Text(item.product.emoji, style: const TextStyle(fontSize: 18))),
                                     )
                                   : Center(child: Text(item.product.emoji, style: const TextStyle(fontSize: 18))),
