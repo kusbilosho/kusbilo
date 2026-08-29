@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -400,12 +401,12 @@ class _SellerAvatar extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(size / 2),
       child: (photoUrl != null && photoUrl!.isNotEmpty)
-          ? Image.network(
-              photoUrl!,
+          ? CachedNetworkImage(
+              imageUrl: photoUrl!,
               width: size,
               height: size,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => _initialCircle(initial),
+              errorWidget: (_, __, ___) => _initialCircle(initial),
             )
           : _initialCircle(initial),
     );
@@ -448,10 +449,10 @@ class _SimilarProductCard extends StatelessWidget {
                 child: product.imageUrl != null
                     ? ClipRRect(
                         borderRadius: BorderRadius.circular(8),
-                        child: Image.network(product.imageUrl!,
+                        child: CachedNetworkImage(imageUrl: product.imageUrl!,
                             fit: BoxFit.cover,
                             width: double.infinity,
-                            errorBuilder: (_, __, ___) => Text(product.emoji, style: const TextStyle(fontSize: 30))),
+                            errorWidget: (_, __, ___) => Text(product.emoji, style: const TextStyle(fontSize: 30))),
                       )
                     : Text(product.emoji, style: const TextStyle(fontSize: 30)),
               ),
