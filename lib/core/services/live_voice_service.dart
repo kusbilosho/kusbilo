@@ -15,11 +15,25 @@ import '../../features/home/data/models/product.dart';
 /// before the server's VAD calls it "speech" — it can't tell the
 /// difference between a fan/traffic/bazaar hum that's simply loud
 /// enough to clear that bar, and an actual voice. This gate is what
-/// makes that distinction: it tracks the room's steady background
-/// level and quietens anything that looks like *that* — rather than
-/// dropping it, which would create silent gaps the server dislikes —
-/// while leaving genuine speech, which is both louder AND more
-/// sudden than a steady hum, completely untouched.
+/// makes that distinction, using three techniques stacked together:
+///  1. A high-pass pre-filter used ONLY for the loudness measurement
+///     (never applied to the audio actually sent) — steady rumble
+///     (fans, AC compressors, traffic, market hum) sits mostly below
+///     speech's range, so measuring loudness after stripping that out
+///     tells speech and noise apart far better than raw volume does,
+///     especially once the background is genuinely loud.
+///  2. A short "hangover" after the last detected speech, so a normal
+///     mid-sentence dip (a consonant, a breath, a half-second pause)
+///     doesn't get gated like real silence and chop the buyer's own
+///     sentence into fragments.
+///  3. A smoothed, per-sample gain ramp instead of an instant on/off,
+///     so the transition in and out of gating doesn't produce an
+///     audible click — and doesn't hand Gemini's own VAD an abrupt
+///     discontinuity right at the edge of speech.
+/// Background that still reads as noise after all that isn't dropped,
+/// just turned down — quiet enough to sit under Gemini's VAD threshold
+/// without leaving true silence, which keeps the stream continuous the
+/// way the Live API expects.
 class _MicNoiseGate {
   // Conservative low start — real ambient noise is learned quickly via
   // _riseAlpha, but starting low means the gate never mistakes a quiet
@@ -28,7 +42,13 @@ class _MicNoiseGate {
   double _noiseFloor = 120;
   static const double _initialFloor = 120;
 
-  void reset() => _noiseFloor = _initialFloor;
+  void reset() {
+    _noiseFloor = _initialFloor;
+    _hpPrevIn = 0;
+    _hpPrevOut = 0;
+    _gain = 1.0;
+    _hangoverRemaining = 0;
+  }
 
   // Floor tracks upward faster than it decays. A sudden loud noise
   // (a horn, a door) shouldn't instantly redefine "normal background"
@@ -52,6 +72,23 @@ class _MicNoiseGate {
   // genuine speech (someone speaking quietly close to the mic).
   static const double _maxFloor = 1400;
 
+  // One-pole high-pass, ~150Hz at 16kHz sample rate — detection only,
+  // per the class doc above.
+  static const double _hpAlpha = 0.955;
+  double _hpPrevIn = 0;
+  double _hpPrevOut = 0;
+
+  // ~0.5s of hold-open after the last chunk that read as real speech.
+  static const int _hangoverSamples = 8000;
+  int _hangoverRemaining = 0;
+
+  // Smoothed per-sample gain. Attack (opening up for real speech) is
+  // fast so onset isn't clipped; release (easing down into "gated") is
+  // slower so it fades rather than cuts.
+  double _gain = 1.0;
+  static const double _attackAlpha = 0.5;
+  static const double _releaseAlpha = 0.05;
+
   Uint8List process(Uint8List chunk) {
     if (chunk.lengthInBytes < 2) return chunk;
     // Wrapped defensively: this gate is a *quality* improvement, never
@@ -71,26 +108,41 @@ class _MicNoiseGate {
 
       double sumSquares = 0;
       for (var i = 0; i < sampleCount; i++) {
-        final s = view.getInt16(i * 2, Endian.little);
-        sumSquares += (s * s).toDouble();
+        final s = view.getInt16(i * 2, Endian.little).toDouble();
+        // High-pass filter for the loudness measurement only — see
+        // class doc. Real signal sent below stays full-band.
+        final hp = _hpAlpha * (_hpPrevOut + s - _hpPrevIn);
+        _hpPrevIn = s;
+        _hpPrevOut = hp;
+        sumSquares += hp * hp;
       }
       final rms = math.sqrt(sumSquares / sampleCount);
 
       final isLikelySpeech = rms > _noiseFloor * _speechMultiplier;
+      final wasInHangover = _hangoverRemaining > 0;
+      final gateOpen = isLikelySpeech || wasInHangover;
+
       if (isLikelySpeech) {
-        // Don't let genuine speech drag the floor upward — only silence
-        // and steady hum should ever redefine "background".
-        return chunk;
+        // Don't let genuine speech (or its hangover tail) drag the
+        // floor upward — only genuine background should redefine it.
+        _hangoverRemaining = _hangoverSamples;
+      } else if (wasInHangover) {
+        _hangoverRemaining -= sampleCount;
+        if (_hangoverRemaining < 0) _hangoverRemaining = 0;
+      } else {
+        final alpha = rms > _noiseFloor ? _riseAlpha : _fallAlpha;
+        final nextFloor = _noiseFloor + (rms - _noiseFloor) * alpha;
+        _noiseFloor = nextFloor.isFinite ? math.min(_maxFloor, nextFloor) : _initialFloor;
       }
 
-      final alpha = rms > _noiseFloor ? _riseAlpha : _fallAlpha;
-      final nextFloor = _noiseFloor + (rms - _noiseFloor) * alpha;
-      _noiseFloor = nextFloor.isFinite ? math.min(_maxFloor, nextFloor) : _initialFloor;
-
+      final targetGain = gateOpen ? 1.0 : _gateAttenuation;
       final out = ByteData(chunk.lengthInBytes);
       for (var i = 0; i < sampleCount; i++) {
+        final alpha = targetGain > _gain ? _attackAlpha : _releaseAlpha;
+        _gain += (targetGain - _gain) * alpha;
         final s = view.getInt16(i * 2, Endian.little);
-        out.setInt16(i * 2, (s * _gateAttenuation).round(), Endian.little);
+        final sample = (s * _gain).round().clamp(-32768, 32767).toInt();
+        out.setInt16(i * 2, sample, Endian.little);
       }
       return out.buffer.asUint8List();
     } catch (_) {
@@ -177,7 +229,7 @@ class LiveVoiceService {
   bool _setupComplete = false;
   bool _manualDisconnect = false;
   int _reconnectAttempts = 0;
-  static const _maxReconnectAttempts = 2;
+  static const _maxReconnectAttempts = 3;
 
   // Mic streams continuously, even while the AI is talking — that's
   // what makes it feel like a real call instead of a walkie-talkie.
@@ -397,8 +449,34 @@ class LiveVoiceService {
 Extra instructions from the shop admin — follow these too, on top of everything above:
 $trimmedExtra''';
 
+    const naturalDeliveryLine =
+        'Talk the way a helpful, unhurried shop assistant actually talks on the '
+        'phone — short sentences, everyday words, the odd natural filler ("haan", '
+        '"dekhiye", "ek second"), not a script. Never repeat the buyer\'s sentence '
+        'back word-for-word, never say the same stock phrase twice in one call, and '
+        'don\'t narrate what you\'re about to do ("I will now add that") — just do '
+        'it and speak like a person would. If you mishear something, ask casually '
+        '("sorry, dobara boliye?") instead of apologising at length.';
+
+    // Sounding natural is a legitimate goal, but it stops at actually
+    // lying about what's on the other end of the call. If a buyer
+    // directly and plainly asks whether they're talking to a person, an
+    // AI, or a bot, answer that specific question honestly and briefly,
+    // then keep helping — don't dodge it and don't make a big deal of
+    // it either. This only applies to a direct, explicit question, not
+    // to normal conversational phrasing.
+    const honestyLine =
+        'One exception to all of the above: if the buyer directly and plainly asks '
+        'whether you\'re a real person, an AI, or a bot, tell them the truth in one '
+        'short sentence, then carry on helping normally — don\'t dodge the question '
+        'and don\'t make a big deal out of it either.';
+
     return '''
 You are Kusbilo's real, sensible voice assistant on a live phone call with a buyer — not a robot reading a script. $languageLine $languageMatchLine
+
+$naturalDeliveryLine
+
+$honestyLine
 
 What's true about the app today (this can change, don't treat it as a rigid rulebook):
 $appFaq
@@ -572,7 +650,11 @@ For anything about the app, an order, or a product, answer naturally and helpful
       _phaseController.add(LiveCallPhase.connecting);
       final key = _lastApiKey;
       final prompt = _lastSystemPrompt;
-      Future.delayed(Duration(milliseconds: 800 * _reconnectAttempts), () {
+      // Shorter first retry than before (was a flat 800ms) — on a flaky
+      // connection (crowded market, weak signal) a fast first attempt
+      // often just works, and every extra 100ms here is dead air the
+      // buyer sits through with no idea what's happening.
+      Future.delayed(Duration(milliseconds: 400 * _reconnectAttempts), () {
         if (_manualDisconnect || key == null || prompt == null) return;
         _connect(apiKey: key, systemPrompt: prompt);
       });
