@@ -968,9 +968,9 @@ class AppStrings {
 
   String get liveCallConnecting => _isHindi ? 'जोड़ा जा रहा है...' : 'Connecting...';
 
-  String get liveCallInProgress => _isHindi ? 'बात हो रही है — बोलिए' : 'Call in progress — go ahead and speak';
+  String get liveCallInProgress => _isHindi ? 'सुन रहे हैं — बोलिए' : 'Listening — go ahead and speak';
 
-  String get liveCallEndButton => _isHindi ? 'कॉल खत्म करें' : 'End call';
+  String get liveCallEndButton => _isHindi ? 'बातचीत बंद करें' : 'End';
 
   String get liveCallStartButton => _isHindi ? 'बोलकर ऑर्डर करें' : 'Order by voice';
 
