@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
@@ -7,6 +8,80 @@ import 'package:record/record.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../localization/app_strings.dart';
 import '../../features/home/data/models/product.dart';
+
+/// Runs on every mic chunk BEFORE it's sent to Gemini, entirely
+/// on-device. Google's own `startOfSpeechSensitivity: LOW` setting
+/// (see `_connect` below) only changes how *hard* a sound has to hit
+/// before the server's VAD calls it "speech" — it can't tell the
+/// difference between a fan/traffic/bazaar hum that's simply loud
+/// enough to clear that bar, and an actual voice. This gate is what
+/// makes that distinction: it tracks the room's steady background
+/// level and quietens anything that looks like *that* — rather than
+/// dropping it, which would create silent gaps the server dislikes —
+/// while leaving genuine speech, which is both louder AND more
+/// sudden than a steady hum, completely untouched.
+class _MicNoiseGate {
+  // Conservative low start — real ambient noise is learned quickly via
+  // _riseAlpha, but starting low means the gate never mistakes a quiet
+  // room for "loud background" and doesn't wrongly attenuate the
+  // buyer's very first words of the call.
+  double _noiseFloor = 120;
+  static const double _initialFloor = 120;
+
+  void reset() => _noiseFloor = _initialFloor;
+
+  // Floor tracks upward faster than it decays. A sudden loud noise
+  // (a horn, a door) shouldn't instantly redefine "normal background"
+  // for the next several seconds — but a fan or AC that's been running
+  // the whole call should be learned as background within ~1-2s.
+  static const double _riseAlpha = 0.06;
+  static const double _fallAlpha = 0.015;
+
+  // A chunk has to be at least this many times louder than the
+  // learned floor before it's treated as real speech and passed
+  // through unmodified.
+  static const double _speechMultiplier = 2.3;
+
+  // Steady background that fails that test isn't dropped, just turned
+  // down to ~12% amplitude — quiet enough to sit comfortably under
+  // Gemini's own VAD threshold without leaving true silence, which
+  // keeps the stream continuous the way the Live API expects.
+  static const double _gateAttenuation = 0.12;
+
+  // Never let the floor climb high enough to start swallowing soft,
+  // genuine speech (someone speaking quietly close to the mic).
+  static const double _maxFloor = 1400;
+
+  Uint8List process(Uint8List chunk) {
+    if (chunk.lengthInBytes < 2) return chunk;
+    final samples = chunk.buffer.asInt16List(
+      chunk.offsetInBytes,
+      chunk.lengthInBytes ~/ 2,
+    );
+
+    double sumSquares = 0;
+    for (final s in samples) {
+      sumSquares += (s * s).toDouble();
+    }
+    final rms = math.sqrt(sumSquares / samples.length);
+
+    final isLikelySpeech = rms > _noiseFloor * _speechMultiplier;
+    if (isLikelySpeech) {
+      // Don't let genuine speech drag the floor upward — only silence
+      // and steady hum should ever redefine "background".
+      return chunk;
+    }
+
+    final alpha = rms > _noiseFloor ? _riseAlpha : _fallAlpha;
+    _noiseFloor = math.min(_maxFloor, _noiseFloor + (rms - _noiseFloor) * alpha);
+
+    final gated = Int16List.fromList(samples);
+    for (var i = 0; i < gated.length; i++) {
+      gated[i] = (gated[i] * _gateAttenuation).round();
+    }
+    return gated.buffer.asUint8List();
+  }
+}
 
 /// A function call the model made mid-conversation — e.g. "the buyer
 /// wants 2kg of onions, add product X with quantity 2 to their cart."
@@ -113,6 +188,8 @@ class LiveVoiceService {
   String? _lastApiKey;
   String? _lastSystemPrompt;
 
+  final _MicNoiseGate _noiseGate = _MicNoiseGate();
+
   // Gemini Live sessions die every ~10 minutes no matter what — that's
   // a hard platform limit, not something any client-side fix can avoid.
   // sessionResumption is Google's own answer to it: the server hands
@@ -171,6 +248,7 @@ class LiveVoiceService {
     required bool isHindi,
   }) async {
     _manualDisconnect = false;
+    _noiseGate.reset();
     _phaseController.add(LiveCallPhase.connecting);
 
     final config = await _fetchConfig();
@@ -273,8 +351,22 @@ class LiveVoiceService {
 ''';
 
     final languageLine = isHindi
-        ? 'खरीदार ने हिंदी चुनी है — हमेशा हिंदी में बोलो (हिंग्लिश ठीक है), टूटी-फूटी भाषा में भी मतलब समझो।'
-        : 'The buyer has chosen English — always reply in English, plain and conversational.';
+        ? 'खरीदार ने हिंदी चुनी है, तो शुरुआत हिंदी में करो (हिंग्लिश ठीक है)।'
+        : 'The buyer has chosen English, so start the call in English.';
+
+    // On top of the app's chosen default above, always mirror whatever
+    // language the buyer actually speaks in, turn by turn — a buyer
+    // switching to Hindi, English, Hinglish, or a regional language
+    // mid-call is common, and replying in the "wrong" language despite
+    // understanding them fine is what makes it feel like a bot form,
+    // not a real call with a real person.
+    const languageMatchLine =
+        'Beyond that starting point: every single reply, always speak back in '
+        'whichever language the buyer just used in THAT turn — Hindi, English, '
+        'Hinglish, or a regional language, whatever it is. Don\'t stay stuck in '
+        'one language if they switch mid-call, and don\'t ask them which '
+        'language to use — just match them naturally, the way a real person '
+        'switching languages with a caller would.';
 
     final trimmedExtra = customInstructions?.trim() ?? '';
     // Kept as its own clearly-labelled block, appended after the core
@@ -290,7 +382,7 @@ Extra instructions from the shop admin — follow these too, on top of everythin
 $trimmedExtra''';
 
     return '''
-You are Kusbilo's real, sensible voice assistant on a live phone call with a buyer — not a robot reading a script. $languageLine
+You are Kusbilo's real, sensible voice assistant on a live phone call with a buyer — not a robot reading a script. $languageLine $languageMatchLine
 
 What's true about the app today (this can change, don't treat it as a rigid rulebook):
 $appFaq
@@ -664,10 +756,19 @@ For anything about the app, an order, or a product, answer naturally and helpful
       // Mic keeps recording while muted (instant unmute, no restart)
       // but a muted buyer's audio shouldn't reach the model at all.
       if (_isMuted || _channel == null) return;
+
+      // Quiets steady background noise (fan/traffic/bazaar hum) before
+      // it ever reaches Gemini's own VAD, so it stops getting
+      // misread as "the buyer started talking" and cutting the AI
+      // off mid-sentence. Real speech passes through untouched — see
+      // _MicNoiseGate for why this catches what server-side
+      // sensitivity tuning alone can't.
+      final gated = _noiseGate.process(chunk);
+
       final message = {
         'realtimeInput': {
           'audio': {
-            'data': base64Encode(chunk),
+            'data': base64Encode(gated),
             'mimeType': 'audio/pcm;rate=16000',
           },
         },
