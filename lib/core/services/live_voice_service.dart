@@ -856,30 +856,41 @@ For anything about the app, an order, or a product, answer naturally and helpful
     _turnGapsMs.clear();
     _lastChunkArrival = null;
 
-    if (_playbackHandle != null) {
-      await _player.stop(_playbackHandle!);
-    }
-    if (_playbackSource != null) {
-      await _player.disposeSource(_playbackSource!);
-    }
-    _playbackSource = await _player.setBufferStream(
-      sampleRate: 24000,
-      channels: Channels.mono,
-      format: BufferType.s16le,
-      bufferingType: BufferingType.released,
-      bufferingTimeNeeds: 0.1,
-    );
-    _playbackHandle = await _player.play(_playbackSource!);
-
-    _reinitInProgress = false;
-    // Anything that arrived while the stream above was being rebuilt
-    // is genuine current-turn audio the buyer hasn't heard yet — flush
-    // it into the new stream now instead of dropping it.
-    if (_pendingAudio.isNotEmpty) {
-      for (final bytes in _pendingAudio) {
-        _feedAudio(bytes);
+    try {
+      if (_playbackHandle != null) {
+        await _player.stop(_playbackHandle!);
       }
-      _pendingAudio.clear();
+      if (_playbackSource != null) {
+        await _player.disposeSource(_playbackSource!);
+      }
+      _playbackSource = await _player.setBufferStream(
+        sampleRate: 24000,
+        channels: Channels.mono,
+        format: BufferType.s16le,
+        bufferingType: BufferingType.released,
+        bufferingTimeNeeds: 0.1,
+      );
+      _playbackHandle = await _player.play(_playbackSource!);
+    } catch (e) {
+      // If any of the above throws (a real SoLoud hiccup), the call
+      // must not go silent forever waiting for a reinit that never
+      // finishes — surface it and still fall through to the `finally`
+      // below so _reinitInProgress is released and pending audio gets
+      // a chance to play on whatever source we ended up with.
+      onError?.call('Playback reinit failed: $e');
+    } finally {
+      // MUST run no matter what happened above — this is what used to
+      // leave the whole call permanently silent if setBufferStream/
+      // play ever threw: _reinitInProgress stuck at true means every
+      // future chunk piles into _pendingAudio and nothing ever plays
+      // again, with no visible error to explain why.
+      _reinitInProgress = false;
+      if (_pendingAudio.isNotEmpty) {
+        for (final bytes in _pendingAudio) {
+          _feedAudio(bytes);
+        }
+        _pendingAudio.clear();
+      }
     }
   }
 
