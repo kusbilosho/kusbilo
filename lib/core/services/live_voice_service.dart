@@ -54,32 +54,48 @@ class _MicNoiseGate {
 
   Uint8List process(Uint8List chunk) {
     if (chunk.lengthInBytes < 2) return chunk;
-    final samples = chunk.buffer.asInt16List(
-      chunk.offsetInBytes,
-      chunk.lengthInBytes ~/ 2,
-    );
+    // Wrapped defensively: this gate is a *quality* improvement, never
+    // allowed to be a point of failure for the call itself. Any error
+    // here (e.g. an unusual buffer/offset shape on a particular device)
+    // falls back to sending the raw, unmodified chunk through instead
+    // of silently dropping audio — a bug here should degrade back to
+    // "no noise gate", never to "buyer's voice never arrives".
+    try {
+      final sampleCount = chunk.lengthInBytes ~/ 2;
+      // ByteData reads by explicit byte offset regardless of alignment —
+      // unlike `buffer.asInt16List(offsetInBytes, ...)`, which throws
+      // if offsetInBytes isn't itself a multiple of 2. Mic chunks from
+      // the record plugin aren't guaranteed to satisfy that on every
+      // platform, and that throw was silently killing every chunk.
+      final view = ByteData.sublistView(chunk);
 
-    double sumSquares = 0;
-    for (final s in samples) {
-      sumSquares += (s * s).toDouble();
-    }
-    final rms = math.sqrt(sumSquares / samples.length);
+      double sumSquares = 0;
+      for (var i = 0; i < sampleCount; i++) {
+        final s = view.getInt16(i * 2, Endian.little);
+        sumSquares += (s * s).toDouble();
+      }
+      final rms = math.sqrt(sumSquares / sampleCount);
 
-    final isLikelySpeech = rms > _noiseFloor * _speechMultiplier;
-    if (isLikelySpeech) {
-      // Don't let genuine speech drag the floor upward — only silence
-      // and steady hum should ever redefine "background".
+      final isLikelySpeech = rms > _noiseFloor * _speechMultiplier;
+      if (isLikelySpeech) {
+        // Don't let genuine speech drag the floor upward — only silence
+        // and steady hum should ever redefine "background".
+        return chunk;
+      }
+
+      final alpha = rms > _noiseFloor ? _riseAlpha : _fallAlpha;
+      final nextFloor = _noiseFloor + (rms - _noiseFloor) * alpha;
+      _noiseFloor = nextFloor.isFinite ? math.min(_maxFloor, nextFloor) : _initialFloor;
+
+      final out = ByteData(chunk.lengthInBytes);
+      for (var i = 0; i < sampleCount; i++) {
+        final s = view.getInt16(i * 2, Endian.little);
+        out.setInt16(i * 2, (s * _gateAttenuation).round(), Endian.little);
+      }
+      return out.buffer.asUint8List();
+    } catch (_) {
       return chunk;
     }
-
-    final alpha = rms > _noiseFloor ? _riseAlpha : _fallAlpha;
-    _noiseFloor = math.min(_maxFloor, _noiseFloor + (rms - _noiseFloor) * alpha);
-
-    final gated = Int16List.fromList(samples);
-    for (var i = 0; i < gated.length; i++) {
-      gated[i] = (gated[i] * _gateAttenuation).round();
-    }
-    return gated.buffer.asUint8List();
   }
 }
 
