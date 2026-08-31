@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../../../core/localization/app_strings.dart';
 import '../../../../core/localization/locale_provider.dart';
@@ -36,7 +37,7 @@ class _LiveCallSheet extends StatefulWidget {
   State<_LiveCallSheet> createState() => _LiveCallSheetState();
 }
 
-class _LiveCallSheetState extends State<_LiveCallSheet> {
+class _LiveCallSheetState extends State<_LiveCallSheet> with TickerProviderStateMixin {
   final _service = LiveVoiceService();
   LiveCallPhase _phase = LiveCallPhase.connecting;
   bool _isMuted = false;
@@ -46,6 +47,23 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
   bool _ended = false;
   bool _placingOrder = false;
   final List<String> _addedLines = [];
+
+  // Subtle continuous motion behind the mic/speaker icon so the state
+  // doesn't look frozen — not meant to read as a "ringing phone", just
+  // enough life to show the assistant is actively listening/talking.
+  late final AnimationController _pulseController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..repeat(reverse: true);
+
+  // Drives the little equalizer bars while the AI is talking — each
+  // bar reads the same clock at a different phase offset so they
+  // don't move in lockstep, which is what makes it read as "sound"
+  // rather than an obviously mechanical loop.
+  late final AnimationController _eqController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 700),
+  )..repeat();
 
   @override
   void initState() {
@@ -196,14 +214,22 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
   }
 
   Future<void> _endCall() async {
+    HapticFeedback.mediumImpact();
     _ended = true;
     await _service.stop();
     if (mounted) Navigator.of(context).pop();
   }
 
+  void _toggleMute() {
+    HapticFeedback.selectionClick();
+    _service.toggleMute();
+  }
+
   @override
   void dispose() {
     _ended = true;
+    _pulseController.dispose();
+    _eqController.dispose();
     _service.dispose();
     super.dispose();
   }
@@ -279,7 +305,7 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
                   if (_phase == LiveCallPhase.listening || _phase == LiveCallPhase.aiSpeaking) ...[
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: _service.toggleMute,
+                        onPressed: _toggleMute,
                         icon: Icon(_isMuted ? Icons.mic_off : Icons.mic, size: 18),
                         label: Text(
                           _isMuted ? strings.liveCallUnmuteButton : strings.liveCallMuteButton,
@@ -296,11 +322,11 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: _endCall,
-                      icon: const Icon(Icons.call_end, color: Colors.white, size: 18),
+                      icon: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
                       label: Text(strings.liveCallEndButton,
                           style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white)),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFC0453B),
+                        backgroundColor: AppColors.charcoal,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
@@ -338,11 +364,12 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
       case LiveCallPhase.listening:
         return Column(
           children: [
-            TweenAnimationBuilder<double>(
-              tween: Tween(begin: 0.9, end: 1.1),
-              duration: const Duration(milliseconds: 900),
-              curve: Curves.easeInOut,
-              builder: (context, scale, child) => Transform.scale(scale: scale, child: child),
+            AnimatedBuilder(
+              animation: _pulseController,
+              builder: (context, child) {
+                final scale = 0.95 + (_pulseController.value * 0.08);
+                return Transform.scale(scale: scale, child: child);
+              },
               child: Container(
                 width: 84,
                 height: 84,
@@ -362,7 +389,28 @@ class _LiveCallSheetState extends State<_LiveCallSheet> {
               width: 84,
               height: 84,
               decoration: const BoxDecoration(color: AppColors.mustard, shape: BoxShape.circle),
-              child: const Icon(Icons.graphic_eq_rounded, color: Colors.white, size: 36),
+              child: Center(
+                child: AnimatedBuilder(
+                  animation: _eqController,
+                  builder: (context, _) {
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: List.generate(4, (i) {
+                        // Each bar samples the same loop at a different
+                        // phase so they don't move in lockstep.
+                        final t = (_eqController.value + i * 0.22) % 1.0;
+                        final h = 8 + (1 - (2 * t - 1).abs()) * 20;
+                        return Container(
+                          width: 5,
+                          height: h,
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(3)),
+                        );
+                      }),
+                    );
+                  },
+                ),
+              ),
             ),
             const SizedBox(height: 16),
             Text(strings.liveCallAiSpeakingLabel,
