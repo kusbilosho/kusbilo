@@ -15,25 +15,11 @@ import '../../features/home/data/models/product.dart';
 /// before the server's VAD calls it "speech" — it can't tell the
 /// difference between a fan/traffic/bazaar hum that's simply loud
 /// enough to clear that bar, and an actual voice. This gate is what
-/// makes that distinction, using three techniques stacked together:
-///  1. A high-pass pre-filter used ONLY for the loudness measurement
-///     (never applied to the audio actually sent) — steady rumble
-///     (fans, AC compressors, traffic, market hum) sits mostly below
-///     speech's range, so measuring loudness after stripping that out
-///     tells speech and noise apart far better than raw volume does,
-///     especially once the background is genuinely loud.
-///  2. A short "hangover" after the last detected speech, so a normal
-///     mid-sentence dip (a consonant, a breath, a half-second pause)
-///     doesn't get gated like real silence and chop the buyer's own
-///     sentence into fragments.
-///  3. A smoothed, per-sample gain ramp instead of an instant on/off,
-///     so the transition in and out of gating doesn't produce an
-///     audible click — and doesn't hand Gemini's own VAD an abrupt
-///     discontinuity right at the edge of speech.
-/// Background that still reads as noise after all that isn't dropped,
-/// just turned down — quiet enough to sit under Gemini's VAD threshold
-/// without leaving true silence, which keeps the stream continuous the
-/// way the Live API expects.
+/// makes that distinction: it tracks the room's steady background
+/// level and quietens anything that looks like *that* — rather than
+/// dropping it, which would create silent gaps the server dislikes —
+/// while leaving genuine speech, which is both louder AND more
+/// sudden than a steady hum, completely untouched.
 class _MicNoiseGate {
   // Conservative low start — real ambient noise is learned quickly via
   // _riseAlpha, but starting low means the gate never mistakes a quiet
@@ -42,13 +28,7 @@ class _MicNoiseGate {
   double _noiseFloor = 120;
   static const double _initialFloor = 120;
 
-  void reset() {
-    _noiseFloor = _initialFloor;
-    _hpPrevIn = 0;
-    _hpPrevOut = 0;
-    _gain = 1.0;
-    _hangoverRemaining = 0;
-  }
+  void reset() => _noiseFloor = _initialFloor;
 
   // Floor tracks upward faster than it decays. A sudden loud noise
   // (a horn, a door) shouldn't instantly redefine "normal background"
@@ -72,23 +52,6 @@ class _MicNoiseGate {
   // genuine speech (someone speaking quietly close to the mic).
   static const double _maxFloor = 1400;
 
-  // One-pole high-pass, ~150Hz at 16kHz sample rate — detection only,
-  // per the class doc above.
-  static const double _hpAlpha = 0.955;
-  double _hpPrevIn = 0;
-  double _hpPrevOut = 0;
-
-  // ~0.5s of hold-open after the last chunk that read as real speech.
-  static const int _hangoverSamples = 8000;
-  int _hangoverRemaining = 0;
-
-  // Smoothed per-sample gain. Attack (opening up for real speech) is
-  // fast so onset isn't clipped; release (easing down into "gated") is
-  // slower so it fades rather than cuts.
-  double _gain = 1.0;
-  static const double _attackAlpha = 0.5;
-  static const double _releaseAlpha = 0.05;
-
   Uint8List process(Uint8List chunk) {
     if (chunk.lengthInBytes < 2) return chunk;
     // Wrapped defensively: this gate is a *quality* improvement, never
@@ -108,41 +71,26 @@ class _MicNoiseGate {
 
       double sumSquares = 0;
       for (var i = 0; i < sampleCount; i++) {
-        final s = view.getInt16(i * 2, Endian.little).toDouble();
-        // High-pass filter for the loudness measurement only — see
-        // class doc. Real signal sent below stays full-band.
-        final hp = _hpAlpha * (_hpPrevOut + s - _hpPrevIn);
-        _hpPrevIn = s;
-        _hpPrevOut = hp;
-        sumSquares += hp * hp;
+        final s = view.getInt16(i * 2, Endian.little);
+        sumSquares += (s * s).toDouble();
       }
       final rms = math.sqrt(sumSquares / sampleCount);
 
       final isLikelySpeech = rms > _noiseFloor * _speechMultiplier;
-      final wasInHangover = _hangoverRemaining > 0;
-      final gateOpen = isLikelySpeech || wasInHangover;
-
       if (isLikelySpeech) {
-        // Don't let genuine speech (or its hangover tail) drag the
-        // floor upward — only genuine background should redefine it.
-        _hangoverRemaining = _hangoverSamples;
-      } else if (wasInHangover) {
-        _hangoverRemaining -= sampleCount;
-        if (_hangoverRemaining < 0) _hangoverRemaining = 0;
-      } else {
-        final alpha = rms > _noiseFloor ? _riseAlpha : _fallAlpha;
-        final nextFloor = _noiseFloor + (rms - _noiseFloor) * alpha;
-        _noiseFloor = nextFloor.isFinite ? math.min(_maxFloor, nextFloor) : _initialFloor;
+        // Don't let genuine speech drag the floor upward — only silence
+        // and steady hum should ever redefine "background".
+        return chunk;
       }
 
-      final targetGain = gateOpen ? 1.0 : _gateAttenuation;
+      final alpha = rms > _noiseFloor ? _riseAlpha : _fallAlpha;
+      final nextFloor = _noiseFloor + (rms - _noiseFloor) * alpha;
+      _noiseFloor = nextFloor.isFinite ? math.min(_maxFloor, nextFloor) : _initialFloor;
+
       final out = ByteData(chunk.lengthInBytes);
       for (var i = 0; i < sampleCount; i++) {
-        final alpha = targetGain > _gain ? _attackAlpha : _releaseAlpha;
-        _gain += (targetGain - _gain) * alpha;
         final s = view.getInt16(i * 2, Endian.little);
-        final sample = (s * _gain).round().clamp(-32768, 32767).toInt();
-        out.setInt16(i * 2, sample, Endian.little);
+        out.setInt16(i * 2, (s * _gateAttenuation).round(), Endian.little);
       }
       return out.buffer.asUint8List();
     } catch (_) {
@@ -229,7 +177,7 @@ class LiveVoiceService {
   bool _setupComplete = false;
   bool _manualDisconnect = false;
   int _reconnectAttempts = 0;
-  static const _maxReconnectAttempts = 3;
+  static const _maxReconnectAttempts = 2;
 
   // Mic streams continuously, even while the AI is talking — that's
   // what makes it feel like a real call instead of a walkie-talkie.
@@ -257,6 +205,58 @@ class LiveVoiceService {
   String? _lastSystemPrompt;
 
   final _MicNoiseGate _noiseGate = _MicNoiseGate();
+
+  // --- Jitter buffer (adaptive) ---
+  // Gemini's audio chunks don't arrive at a perfectly steady rate over a
+  // mobile network — they come in uneven bursts (a gap, then several
+  // chunks at once). Feeding each chunk to SoLoud the instant it lands
+  // means playback can run dry during those gaps, which is the
+  // "cutting out like a bad network call" sound — even with
+  // bufferingTimeNeeds already giving SoLoud a small 0.1s native
+  // cushion, a shaky connection's gaps can still outrun that. Instead,
+  // the first bit of each AI turn is held back here until a small
+  // cushion has built up, then it's all handed to SoLoud at once and
+  // fed normally after — the cushion is what absorbs the gaps.
+  //
+  // The cushion size isn't fixed: the real gap between consecutive
+  // audio chunks is measured, and used to grow or shrink the cushion
+  // for the *next* turn — a choppy connection earns more cushion
+  // (fewer dropouts, a bit more delay before the AI starts), a smooth
+  // one gets eased back down (snappier replies). Same idea as the
+  // adaptive jitter buffers in real VoIP/WebRTC stacks, a simpler
+  // version of it.
+  static const int _sampleRateOut = 24000;
+  static const int _bytesPerSampleOut = 2; // 16-bit PCM
+  static const double _minCushionSeconds = 0.25;
+  static const double _maxCushionSeconds = 1.0;
+  double _cushionSeconds = _minCushionSeconds;
+  int get _cushionBytes => (_sampleRateOut * _bytesPerSampleOut * _cushionSeconds).round();
+  bool _bufferingTurn = true;
+  final BytesBuilder _jitterBuffer = BytesBuilder(copy: false);
+
+  // Rolling gap measurements (ms between chunk arrivals), reset every
+  // turn — a spiky turn (big gaps) pushes next turn's cushion up, a
+  // smooth turn eases it back down.
+  DateTime? _lastChunkArrival;
+  final List<int> _turnGapsMs = [];
+
+  // --- Barge-in cancellation ---
+  // _handleBargeIn tears down the old buffer stream and builds a fresh
+  // one, but that teardown+rebuild has real awaits in it — it isn't
+  // instant. Any server message that arrives in that window (another
+  // `interrupted`, or the model already starting its next turn) runs
+  // on the very same event loop the moment the current await yields,
+  // which is *before* _handleBargeIn has finished reassigning
+  // _playbackSource. Without a guard, that message would either write
+  // into the buffer stream that's mid-teardown, or write into a
+  // dangling reference — audio silently dropped or a stray error,
+  // never anything the buyer could make sense of. `_playbackGeneration`
+  // tags which buffer-stream instance is "current"; anything that
+  // arrives while a reinit is in flight is held in `_pendingAudio`
+  // instead of fed, and flushed once the new stream is actually ready.
+  int _playbackGeneration = 0;
+  bool _reinitInProgress = false;
+  final List<Uint8List> _pendingAudio = [];
 
   // Gemini Live sessions die every ~10 minutes no matter what — that's
   // a hard platform limit, not something any client-side fix can avoid.
@@ -449,34 +449,8 @@ class LiveVoiceService {
 Extra instructions from the shop admin — follow these too, on top of everything above:
 $trimmedExtra''';
 
-    const naturalDeliveryLine =
-        'Talk the way a helpful, unhurried shop assistant actually talks on the '
-        'phone — short sentences, everyday words, the odd natural filler ("haan", '
-        '"dekhiye", "ek second"), not a script. Never repeat the buyer\'s sentence '
-        'back word-for-word, never say the same stock phrase twice in one call, and '
-        'don\'t narrate what you\'re about to do ("I will now add that") — just do '
-        'it and speak like a person would. If you mishear something, ask casually '
-        '("sorry, dobara boliye?") instead of apologising at length.';
-
-    // Sounding natural is a legitimate goal, but it stops at actually
-    // lying about what's on the other end of the call. If a buyer
-    // directly and plainly asks whether they're talking to a person, an
-    // AI, or a bot, answer that specific question honestly and briefly,
-    // then keep helping — don't dodge it and don't make a big deal of
-    // it either. This only applies to a direct, explicit question, not
-    // to normal conversational phrasing.
-    const honestyLine =
-        'One exception to all of the above: if the buyer directly and plainly asks '
-        'whether you\'re a real person, an AI, or a bot, tell them the truth in one '
-        'short sentence, then carry on helping normally — don\'t dodge the question '
-        'and don\'t make a big deal out of it either.';
-
     return '''
 You are Kusbilo's real, sensible voice assistant on a live phone call with a buyer — not a robot reading a script. $languageLine $languageMatchLine
-
-$naturalDeliveryLine
-
-$honestyLine
 
 What's true about the app today (this can change, don't treat it as a rigid rulebook):
 $appFaq
@@ -650,11 +624,7 @@ For anything about the app, an order, or a product, answer naturally and helpful
       _phaseController.add(LiveCallPhase.connecting);
       final key = _lastApiKey;
       final prompt = _lastSystemPrompt;
-      // Shorter first retry than before (was a flat 800ms) — on a flaky
-      // connection (crowded market, weak signal) a fast first attempt
-      // often just works, and every extra 100ms here is dead air the
-      // buyer sits through with no idea what's happening.
-      Future.delayed(Duration(milliseconds: 400 * _reconnectAttempts), () {
+      Future.delayed(Duration(milliseconds: 800 * _reconnectAttempts), () {
         if (_manualDisconnect || key == null || prompt == null) return;
         _connect(apiKey: key, systemPrompt: prompt);
       });
@@ -796,8 +766,30 @@ For anything about the app, an order, or a product, answer naturally and helpful
         if (inlineData != null && inlineData['data'] != null) {
           final bytes = base64Decode(inlineData['data'] as String);
           _phaseController.add(LiveCallPhase.aiSpeaking);
-          if (_playbackSource != null) {
-            _player.addAudioDataStream(_playbackSource!, bytes);
+
+          // Track the gap since the last chunk — feeds _adaptCushion
+          // once this turn ends.
+          final now = DateTime.now();
+          if (_lastChunkArrival != null) {
+            _turnGapsMs.add(now.difference(_lastChunkArrival!).inMilliseconds);
+          }
+          _lastChunkArrival = now;
+
+          if (_reinitInProgress) {
+            // Buffer stream is mid-teardown from a barge-in — hold this
+            // chunk instead of feeding a stream that's being replaced.
+            _pendingAudio.add(bytes);
+          } else if (_bufferingTurn) {
+            // Building this turn's jitter-buffer cushion — accumulate,
+            // don't feed yet.
+            _jitterBuffer.add(bytes);
+            if (_jitterBuffer.length >= _cushionBytes) {
+              final cushion = _jitterBuffer.takeBytes();
+              _bufferingTurn = false;
+              _feedAudio(cushion);
+            }
+          } else {
+            _feedAudio(bytes);
           }
         }
         final textPart = (part)['text'] as String?;
@@ -808,8 +800,43 @@ For anything about the app, an order, or a product, answer naturally and helpful
     }
 
     if (serverContent['turnComplete'] == true) {
+      // Short replies can end before the cushion ever fills — flush
+      // whatever's left so the tail of the sentence isn't lost.
+      if (_jitterBuffer.length > 0) {
+        _feedAudio(_jitterBuffer.takeBytes());
+      }
+      _bufferingTurn = true; // ready to buffer next turn's cushion
+      _adaptCushion();
       _phaseController.add(LiveCallPhase.listening);
     }
+  }
+
+  /// Hands bytes to SoLoud's current buffer stream. Only called when
+  /// there's no reinit in flight (see `_reinitInProgress` above), so
+  /// `_playbackSource` is guaranteed to be the live, current-generation
+  /// stream — never one that's mid-teardown from a barge-in.
+  void _feedAudio(Uint8List bytes) {
+    if (_playbackSource != null) {
+      _player.addAudioDataStream(_playbackSource!, bytes);
+    }
+  }
+
+  /// Grows or shrinks next turn's jitter-buffer cushion based on how
+  /// choppy this turn's chunk arrivals were. Adjustments are gradual on
+  /// purpose — jumping the cushion around every turn would itself feel
+  /// inconsistent.
+  void _adaptCushion() {
+    if (_turnGapsMs.isNotEmpty) {
+      final avgGap = _turnGapsMs.reduce((a, b) => a + b) / _turnGapsMs.length;
+      final maxGap = _turnGapsMs.reduce((a, b) => a > b ? a : b);
+      if (avgGap > 120 || maxGap > 400) {
+        _cushionSeconds = (_cushionSeconds + 0.15).clamp(_minCushionSeconds, _maxCushionSeconds);
+      } else if (avgGap < 50 && maxGap < 150) {
+        _cushionSeconds = (_cushionSeconds - 0.05).clamp(_minCushionSeconds, _maxCushionSeconds);
+      }
+    }
+    _turnGapsMs.clear();
+    _lastChunkArrival = null;
   }
 
   /// The buyer started talking over the AI — Google's own barge-in
@@ -818,6 +845,17 @@ For anything about the app, an order, or a product, answer naturally and helpful
   /// whatever audio is already buffered, so it actually feels
   /// interrupted rather than talking over them for another second.
   Future<void> _handleBargeIn() async {
+    // Bump the generation and flag the reinit immediately, before any
+    // await below — any server message handled while this function is
+    // suspended on an await sees `_reinitInProgress == true` and parks
+    // its audio in `_pendingAudio` instead of racing this teardown.
+    _playbackGeneration++;
+    _reinitInProgress = true;
+    _jitterBuffer.clear();
+    _bufferingTurn = true; // ready to buffer the next (post-barge-in) turn's cushion
+    _turnGapsMs.clear();
+    _lastChunkArrival = null;
+
     if (_playbackHandle != null) {
       await _player.stop(_playbackHandle!);
     }
@@ -832,6 +870,17 @@ For anything about the app, an order, or a product, answer naturally and helpful
       bufferingTimeNeeds: 0.1,
     );
     _playbackHandle = await _player.play(_playbackSource!);
+
+    _reinitInProgress = false;
+    // Anything that arrived while the stream above was being rebuilt
+    // is genuine current-turn audio the buyer hasn't heard yet — flush
+    // it into the new stream now instead of dropping it.
+    if (_pendingAudio.isNotEmpty) {
+      for (final bytes in _pendingAudio) {
+        _feedAudio(bytes);
+      }
+      _pendingAudio.clear();
+    }
   }
 
   Future<void> _startMicStreaming() async {
@@ -900,6 +949,16 @@ For anything about the app, an order, or a product, answer naturally and helpful
     _sessionResumeHandle = null;
     _connectTimeoutTimer?.cancel();
     _connectTimeoutTimer = null;
+    // Bump the generation so anything still in flight for this call
+    // (a queued reinit, pending audio) is recognised as stale by any
+    // late callback and never touches the next call's fresh state.
+    _playbackGeneration++;
+    _reinitInProgress = false;
+    _pendingAudio.clear();
+    _jitterBuffer.clear();
+    _bufferingTurn = true;
+    _turnGapsMs.clear();
+    _lastChunkArrival = null;
     await _micSub?.cancel();
     _micSub = null;
     try {
