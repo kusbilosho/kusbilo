@@ -1,103 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
-import 'dart:typed_data';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter_soloud/flutter_soloud.dart';
-import 'package:record/record.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
+
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:livekit_client/livekit_client.dart';
+
 import '../localization/app_strings.dart';
 import '../../features/home/data/models/product.dart';
-
-/// Runs on every mic chunk BEFORE it's sent to Gemini, entirely
-/// on-device. Google's own `startOfSpeechSensitivity: LOW` setting
-/// (see `_connect` below) only changes how *hard* a sound has to hit
-/// before the server's VAD calls it "speech" — it can't tell the
-/// difference between a fan/traffic/bazaar hum that's simply loud
-/// enough to clear that bar, and an actual voice. This gate is what
-/// makes that distinction: it tracks the room's steady background
-/// level and quietens anything that looks like *that* — rather than
-/// dropping it, which would create silent gaps the server dislikes —
-/// while leaving genuine speech, which is both louder AND more
-/// sudden than a steady hum, completely untouched.
-class _MicNoiseGate {
-  // Conservative low start — real ambient noise is learned quickly via
-  // _riseAlpha, but starting low means the gate never mistakes a quiet
-  // room for "loud background" and doesn't wrongly attenuate the
-  // buyer's very first words of the call.
-  double _noiseFloor = 120;
-  static const double _initialFloor = 120;
-
-  void reset() => _noiseFloor = _initialFloor;
-
-  // Floor tracks upward faster than it decays. A sudden loud noise
-  // (a horn, a door) shouldn't instantly redefine "normal background"
-  // for the next several seconds — but a fan or AC that's been running
-  // the whole call should be learned as background within ~1-2s.
-  static const double _riseAlpha = 0.06;
-  static const double _fallAlpha = 0.015;
-
-  // A chunk has to be at least this many times louder than the
-  // learned floor before it's treated as real speech and passed
-  // through unmodified.
-  static const double _speechMultiplier = 2.3;
-
-  // Steady background that fails that test isn't dropped, just turned
-  // down to ~12% amplitude — quiet enough to sit comfortably under
-  // Gemini's own VAD threshold without leaving true silence, which
-  // keeps the stream continuous the way the Live API expects.
-  static const double _gateAttenuation = 0.12;
-
-  // Never let the floor climb high enough to start swallowing soft,
-  // genuine speech (someone speaking quietly close to the mic).
-  static const double _maxFloor = 1400;
-
-  Uint8List process(Uint8List chunk) {
-    if (chunk.lengthInBytes < 2) return chunk;
-    // Wrapped defensively: this gate is a *quality* improvement, never
-    // allowed to be a point of failure for the call itself. Any error
-    // here (e.g. an unusual buffer/offset shape on a particular device)
-    // falls back to sending the raw, unmodified chunk through instead
-    // of silently dropping audio — a bug here should degrade back to
-    // "no noise gate", never to "buyer's voice never arrives".
-    try {
-      final sampleCount = chunk.lengthInBytes ~/ 2;
-      // ByteData reads by explicit byte offset regardless of alignment —
-      // unlike `buffer.asInt16List(offsetInBytes, ...)`, which throws
-      // if offsetInBytes isn't itself a multiple of 2. Mic chunks from
-      // the record plugin aren't guaranteed to satisfy that on every
-      // platform, and that throw was silently killing every chunk.
-      final view = ByteData.sublistView(chunk);
-
-      double sumSquares = 0;
-      for (var i = 0; i < sampleCount; i++) {
-        final s = view.getInt16(i * 2, Endian.little);
-        sumSquares += (s * s).toDouble();
-      }
-      final rms = math.sqrt(sumSquares / sampleCount);
-
-      final isLikelySpeech = rms > _noiseFloor * _speechMultiplier;
-      if (isLikelySpeech) {
-        // Don't let genuine speech drag the floor upward — only silence
-        // and steady hum should ever redefine "background".
-        return chunk;
-      }
-
-      final alpha = rms > _noiseFloor ? _riseAlpha : _fallAlpha;
-      final nextFloor = _noiseFloor + (rms - _noiseFloor) * alpha;
-      _noiseFloor = nextFloor.isFinite ? math.min(_maxFloor, nextFloor) : _initialFloor;
-
-      final out = ByteData(chunk.lengthInBytes);
-      for (var i = 0; i < sampleCount; i++) {
-        final s = view.getInt16(i * 2, Endian.little);
-        out.setInt16(i * 2, (s * _gateAttenuation).round(), Endian.little);
-      }
-      return out.buffer.asUint8List();
-    } catch (_) {
-      return chunk;
-    }
-  }
-}
 
 /// A function call the model made mid-conversation — e.g. "the buyer
 /// wants 2kg of onions, add product X with quantity 2 to their cart."
@@ -118,289 +26,61 @@ class LiveOrderCall {
 /// async work (GPS location + the placeOrder Cloud Function) that only
 /// the screen/providers can do — so the service just hands over the
 /// [functionCallId] and waits for [LiveVoiceService.respondToConfirmOrder]
-/// to be called once that work is done, instead of answering the tool
-/// call immediately like addToCart does.
+/// to be called once that work is done.
 class LiveConfirmOrderCall {
   final String functionCallId;
   const LiveConfirmOrderCall({required this.functionCallId});
 }
 
-/// Coarse call state for driving the call UI — connecting spinner,
-/// pulsing mic while the buyer can speak, a different animation while
-/// the AI is talking, etc.
+/// Coarse call state for driving the call UI.
 enum LiveCallPhase { connecting, listening, aiSpeaking, ended, error }
 
-/// Thrown when Firestore has no usable Gemini API key configured yet
-/// (e.g. `config/geminiLiveApi.apiKey` is missing or empty) — lets the
-/// screen show a clear "not set up" message instead of a raw socket
-/// error.
+/// Thrown when the `createLiveKitToken` Cloud Function reports that
+/// nobody has finished setting up the voice-call backend yet.
 class NoApiKeyConfiguredException implements Exception {
   @override
-  String toString() => 'No Gemini API key is configured.';
+  String toString() => 'Voice call is not configured yet.';
 }
 
-/// Wraps a single Gemini Live API voice session over a direct
-/// WebSocket connection — one continuous, interruptible, streaming
-/// conversation instead of a record → send → wait → play cycle. The
-/// model listens continuously (it decides when the buyer has finished
-/// a thought), can be talked over mid-reply, and speaks back with
-/// almost no perceptible delay, because audio flows both directions on
-/// one open connection — this is what actually makes it feel like a
-/// phone call.
-///
-/// Deliberately NOT Firebase AI Logic: that requires the Firebase
-/// project to be on the paid Blaze plan just to open a Live session.
-/// This talks to `generativelanguage.googleapis.com` directly with a
-/// plain Gemini API key — except the key itself lives in a Firestore
-/// document (`config/geminiLiveApi`, field `apiKey`) instead of being
-/// hardcoded in the app or entered by each buyer. That's what lets the
-/// web admin panel swap the key the moment one runs out of quota, with
-/// zero app update needed and nothing for a buyer to set up.
-///
-/// Ordering works via two tools the model can call whenever the buyer
-/// names something or is ready to check out:
-///  - addToCart: applied immediately, no confirmation needed.
-///  - confirmOrder: surfaced via [onConfirmOrder] so the screen can run
-///    the same location-detect + placeOrder flow the old checkout used,
-///    then report back success/failure with [respondToConfirmOrder].
 class LiveVoiceService {
-  static const _model = 'gemini-3.1-flash-live-preview';
-
-  WebSocketChannel? _channel;
-  StreamSubscription? _wsSub;
-  final AudioRecorder _recorder = AudioRecorder();
-  final SoLoud _player = SoLoud.instance;
-  StreamSubscription<Uint8List>? _micSub;
-  AudioSource? _playbackSource;
-  SoundHandle? _playbackHandle;
-  bool _playerReady = false;
-  bool _setupComplete = false;
-  bool _manualDisconnect = false;
-  int _reconnectAttempts = 0;
-  static const _maxReconnectAttempts = 2;
-
-  // Mic streams continuously, even while the AI is talking — that's
-  // what makes it feel like a real call instead of a walkie-talkie.
-  // Barge-in relies on two layers: on-device echoCancel (set on the
-  // recorder below) stops the AI's own voice from being picked back
-  // up off the speaker, and Gemini's own server-side VAD reports
-  // `interrupted: true` the moment it hears the buyer actually
-  // talking, which _handleBargeIn() uses to cut AI playback instantly.
-  // NOTE: on a phone with weak echo cancellation over loudspeaker,
-  // this can occasionally make the AI hear its own voice as an
-  // interruption. If that turns out to be a real problem for buyers,
-  // the fix is prompting a headset/earpiece, not muting the mic —
-  // muting it is what caused the multi-second "recorded but never
-  // arrives" gaps.
-
-  // If the socket opens fine but Gemini never sends setupComplete back
-  // (a stuck negotiation, not a socket error/close) the call used to sit
-  // on the connecting spinner forever with no way out. This forces an
-  // error after a reasonable wait instead.
-  static const _connectTimeout = Duration(seconds: 15);
-  Timer? _connectTimeoutTimer;
-
-  // Remembered so a silent reconnect can rebuild the exact same session.
-  String? _lastApiKey;
-  String? _lastSystemPrompt;
-
-  final _MicNoiseGate _noiseGate = _MicNoiseGate();
-
-  // --- Jitter buffer (adaptive) ---
-  // Gemini's audio chunks don't arrive at a perfectly steady rate over a
-  // mobile network — they come in uneven bursts (a gap, then several
-  // chunks at once). Feeding each chunk to SoLoud the instant it lands
-  // means playback can run dry during those gaps, which is the
-  // "cutting out like a bad network call" sound — even with
-  // bufferingTimeNeeds already giving SoLoud a small 0.1s native
-  // cushion, a shaky connection's gaps can still outrun that. Instead,
-  // the first bit of each AI turn is held back here until a small
-  // cushion has built up, then it's all handed to SoLoud at once and
-  // fed normally after — the cushion is what absorbs the gaps.
-  //
-  // The cushion size isn't fixed: the real gap between consecutive
-  // audio chunks is measured, and used to grow or shrink the cushion
-  // for the *next* turn — a choppy connection earns more cushion
-  // (fewer dropouts, a bit more delay before the AI starts), a smooth
-  // one gets eased back down (snappier replies). Same idea as the
-  // adaptive jitter buffers in real VoIP/WebRTC stacks, a simpler
-  // version of it.
-  static const int _sampleRateOut = 24000;
-  static const int _bytesPerSampleOut = 2; // 16-bit PCM
-  static const double _minCushionSeconds = 0.25;
-  static const double _maxCushionSeconds = 1.0;
-  double _cushionSeconds = _minCushionSeconds;
-  int get _cushionBytes => (_sampleRateOut * _bytesPerSampleOut * _cushionSeconds).round();
-  bool _bufferingTurn = true;
-  final BytesBuilder _jitterBuffer = BytesBuilder(copy: false);
-
-  // Rolling gap measurements (ms between chunk arrivals), reset every
-  // turn — a spiky turn (big gaps) pushes next turn's cushion up, a
-  // smooth turn eases it back down.
-  DateTime? _lastChunkArrival;
-  final List<int> _turnGapsMs = [];
-
-  // --- Barge-in cancellation ---
-  // _handleBargeIn tears down the old buffer stream and builds a fresh
-  // one, but that teardown+rebuild has real awaits in it — it isn't
-  // instant. Any server message that arrives in that window (another
-  // `interrupted`, or the model already starting its next turn) runs
-  // on the very same event loop the moment the current await yields,
-  // which is *before* _handleBargeIn has finished reassigning
-  // _playbackSource. Without a guard, that message would either write
-  // into the buffer stream that's mid-teardown, or write into a
-  // dangling reference — audio silently dropped or a stray error,
-  // never anything the buyer could make sense of. `_playbackGeneration`
-  // tags which buffer-stream instance is "current"; anything that
-  // arrives while a reinit is in flight is held in `_pendingAudio`
-  // instead of fed, and flushed once the new stream is actually ready.
-  int _playbackGeneration = 0;
-  bool _reinitInProgress = false;
-  final List<Uint8List> _pendingAudio = [];
-
-  // Gemini Live sessions die every ~10 minutes no matter what — that's
-  // a hard platform limit, not something any client-side fix can avoid.
-  // sessionResumption is Google's own answer to it: the server hands
-  // us a handle we can replay on the *next* connection to restore full
-  // conversation context (cart items discussed, what's already been
-  // said) instead of the buyer sounding like they're talking to a
-  // stranger who forgot everything the moment the socket reopens.
-  String? _sessionResumeHandle;
-
-  /// Called whenever the model asks to add something to the cart.
-  void Function(LiveOrderCall call)? onOrderCall;
-
-  /// Called when the buyer says they're ready to place the order.
-  void Function(LiveConfirmOrderCall call)? onConfirmOrder;
-
-  /// Called with the model's live transcript text as it speaks, if
-  /// available — used to show a rough "what it's saying" caption.
-  void Function(String text)? onModelText;
-
-  /// Called with a transcript of what the model heard the BUYER say —
-  /// lets the call screen show quick "सुन लिया" style feedback so a
-  /// buyer isn't left wondering whether their voice actually reached
-  /// the model at all.
-  void Function(String text)? onUserText;
-
-  /// Called if the session drops or errors for any reason.
-  void Function(String error)? onError;
-
-  final _phaseController = StreamController<LiveCallPhase>.broadcast();
-  Stream<LiveCallPhase> get phaseStream => _phaseController.stream;
+  Room? _room;
+  EventsListener<RoomEvent>? _listener;
 
   bool _isMuted = false;
   bool get isMuted => _isMuted;
   final _muteController = StreamController<bool>.broadcast();
   Stream<bool> get muteStream => _muteController.stream;
 
+  final _phaseController = StreamController<LiveCallPhase>.broadcast();
+  Stream<LiveCallPhase> get phaseStream => _phaseController.stream;
+
+  bool get isActive => _room != null;
+
+  void Function(LiveOrderCall call)? onOrderCall;
+  void Function(LiveConfirmOrderCall call)? onConfirmOrder;
+  void Function(String text)? onModelText;
+  void Function(String text)? onUserText;
+  void Function(String error)? onError;
+
+  final Map<String, Completer<String>> _pendingConfirmations = {};
+
+  static const _connectTimeout = Duration(seconds: 15);
+  static const _agentJoinTimeout = Duration(seconds: 20);
+  Timer? _agentJoinTimer;
+
   void toggleMute() {
     _isMuted = !_isMuted;
+    _room?.localParticipant?.setMicrophoneEnabled(!_isMuted);
     _muteController.add(_isMuted);
   }
 
-  bool get isActive => _channel != null;
-
-  /// Starts a live conversation. [products] should be the buyer's
-  /// current catalog (from CatalogProvider) so the model knows exactly
-  /// what's available right now — this is rebuilt fresh every time a
-  /// session starts, never hardcoded. [strings]/[isHindi] pick the
-  /// language the model should actually speak, matching whatever the
-  /// buyer has the app set to.
-  ///
-  /// Throws [NoApiKeyConfiguredException] if nobody has set an API key
-  /// in the admin panel yet.
   Future<void> start(
     List<Product> products,
     AppStrings strings, {
     required bool isHindi,
   }) async {
-    _manualDisconnect = false;
-    _noiseGate.reset();
     _phaseController.add(LiveCallPhase.connecting);
 
-    final config = await _fetchConfig();
-    final apiKey = config['apiKey'];
-    if (apiKey == null || apiKey.trim().isEmpty) {
-      _phaseController.add(LiveCallPhase.error);
-      throw NoApiKeyConfiguredException();
-    }
-
-    final hasMicPermission = await _recorder.hasPermission();
-    if (!hasMicPermission) {
-      _phaseController.add(LiveCallPhase.error);
-      throw Exception('Microphone permission denied');
-    }
-
-    if (!_playerReady) {
-      await _player.init();
-      _playerReady = true;
-    }
-
-    // Playback engine has to be alive and already playing *before* the
-    // socket even opens — not after setupComplete like it used to be.
-    // That old order created a real, silent-failure race: setupComplete
-    // triggered _startMicStreaming() asynchronously and unawaited, which
-    // is what actually built the buffer stream. If Gemini's first audio
-    // chunk arrived before that await finished (easy — Gemini can reply
-    // fast), _playbackSource was still null, the `if (_playbackSource !=
-    // null)` guard quietly skipped it, and the AI's reply was simply
-    // never heard — no error anywhere, connect looked totally fine. This
-    // guarantees the buffer exists ahead of time, no matter how fast the
-    // model answers.
-    await _initPlayback();
-
-    final systemPrompt = _buildSystemPrompt(
-      products,
-      strings,
-      isHindi: isHindi,
-      customInstructions: config['instructions'],
-    );
-    await _connect(apiKey: apiKey, systemPrompt: systemPrompt);
-  }
-
-  Future<void> _initPlayback() async {
-    _playbackSource = await _player.setBufferStream(
-      sampleRate: 24000,
-      channels: Channels.mono,
-      format: BufferType.s16le,
-      bufferingType: BufferingType.released,
-      // flutter_soloud defaults bufferingTimeNeeds to 2 FULL SECONDS if
-      // left unset — meaning playback silently waits for 2s of audio
-      // to accumulate before making a sound at all. That's the single
-      // biggest source of "AI's reply arrives late" on a call: every
-      // single reply eats a hidden 2s tax before the buyer hears
-      // anything. 0.1s is enough to avoid stutter on a steady stream
-      // without the delay feeling like a real phone call.
-      bufferingTimeNeeds: 0.1,
-    );
-    _playbackHandle = await _player.play(_playbackSource!);
-  }
-
-  /// Reads `config/geminiLiveApi` fresh from Firestore every call (not
-  /// cached) so both the key *and* the admin's custom instructions
-  /// always reflect whatever was most recently saved in the admin
-  /// panel, with no app restart needed. Returns `{apiKey, instructions}`
-  /// — either value may be null if unset.
-  Future<Map<String, String?>> _fetchConfig() async {
-    try {
-      final doc = await FirebaseFirestore.instance.collection('settings').doc('geminiLiveApi').get();
-      final data = doc.data();
-      return {
-        'apiKey': data?['apiKey'] as String?,
-        'instructions': data?['instructions'] as String?,
-      };
-    } catch (_) {
-      return {'apiKey': null, 'instructions': null};
-    }
-  }
-
-  String _buildSystemPrompt(
-    List<Product> products,
-    AppStrings strings, {
-    required bool isHindi,
-    String? customInstructions,
-  }) {
     final catalogLines = products
         .where((p) => p.isActive && p.stock > 0)
         .map((p) =>
@@ -418,581 +98,144 @@ class LiveVoiceService {
 - ${strings.faqAppNameAnswer}
 ''';
 
-    final languageLine = isHindi
-        ? 'खरीदार ने हिंदी चुनी है, तो शुरुआत हिंदी में करो (हिंग्लिश ठीक है)।'
-        : 'The buyer has chosen English, so start the call in English.';
-
-    // On top of the app's chosen default above, always mirror whatever
-    // language the buyer actually speaks in, turn by turn — a buyer
-    // switching to Hindi, English, Hinglish, or a regional language
-    // mid-call is common, and replying in the "wrong" language despite
-    // understanding them fine is what makes it feel like a bot form,
-    // not a real call with a real person.
-    const languageMatchLine =
-        'Beyond that starting point: every single reply, always speak back in '
-        'whichever language the buyer just used in THAT turn — Hindi, English, '
-        'Hinglish, or a regional language, whatever it is. Don\'t stay stuck in '
-        'one language if they switch mid-call, and don\'t ask them which '
-        'language to use — just match them naturally, the way a real person '
-        'switching languages with a caller would.';
-
-    final trimmedExtra = customInstructions?.trim() ?? '';
-    // Kept as its own clearly-labelled block, appended after the core
-    // rules rather than mixed into them, so an admin's wording can
-    // never accidentally override the tool-calling behaviour above —
-    // it can only add to it (tone, extra store info, current offers,
-    // festival greetings, etc.).
-    final extraBlock = trimmedExtra.isEmpty
-        ? ''
-        : '''
-
-Extra instructions from the shop admin — follow these too, on top of everything above:
-$trimmedExtra''';
-
-    return '''
-You are Kusbilo's real, sensible voice assistant on a live phone call with a buyer — not a robot reading a script. $languageLine $languageMatchLine
-
-What's true about the app today (this can change, don't treat it as a rigid rulebook):
-$appFaq
-
-What's available right now (from the live catalog):
-${catalogLines.isEmpty ? '(nothing available right now)' : catalogLines}
-
-Tools:
-- addToCart: call this the moment the buyer names something they want. If they don't say a quantity, assume 1. You can call it multiple times in one call for multiple items.
-- confirmOrder: call this only when the buyer clearly says they're done and want to place the order (e.g. "bas order kar do", "that's all, place the order"). After you call it, wait for its result before speaking about the order's outcome:
-  - status "empty": the cart has nothing in it — tell the buyer and ask what they'd like to add.
-  - status "success": the order was placed — congratulate them briefly and mention delivery usually takes 20-60 minutes.
-  - status "location_error": their location couldn't be detected — tell them to finish the order from the checkout screen instead.
-  - status "failed": something went wrong — apologise briefly and ask them to try again in a moment.
-
-For anything about the app, an order, or a product, answer naturally and helpfully in your own words — vary your phrasing, don't recite a script. Only for things totally unrelated to Kusbilo (cricket, politics, etc.) politely say you can only help with Kusbilo. Keep replies short and conversational, like a real phone call.$extraBlock
-''';
-  }
-
-  Future<void> _connect({required String apiKey, required String systemPrompt}) async {
-    _lastApiKey = apiKey;
-    _lastSystemPrompt = systemPrompt;
-    _setupComplete = false;
-
-    _connectTimeoutTimer?.cancel();
-    _connectTimeoutTimer = Timer(_connectTimeout, () {
-      if (_setupComplete || _manualDisconnect) return;
-      onError?.call('Connection timed out. Check your internet and try again.');
+    late final HttpsCallableResult result;
+    try {
+      result = await FirebaseFunctions.instance.httpsCallable('createLiveKitToken').call({
+        'isHindi': isHindi,
+        'appFaq': appFaq,
+        'catalog': catalogLines,
+      });
+    } on FirebaseFunctionsException catch (e) {
       _phaseController.add(LiveCallPhase.error);
-      _channel?.sink.close();
-    });
+      if (e.code == 'failed-precondition') {
+        throw NoApiKeyConfiguredException();
+      }
+      onError?.call('Could not start call: ${e.message}');
+      rethrow;
+    }
 
-    final uri = Uri.parse(
-      'wss://generativelanguage.googleapis.com/ws/'
-      'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'
-      '?key=$apiKey',
+    final data = Map<String, dynamic>.from(result.data as Map);
+    final wsUrl = data['url'] as String?;
+    final token = data['token'] as String?;
+    if (wsUrl == null || token == null) {
+      _phaseController.add(LiveCallPhase.error);
+      throw NoApiKeyConfiguredException();
+    }
+
+    final room = Room(
+      roomOptions: const RoomOptions(
+        adaptiveStream: true,
+        dynacast: true,
+        defaultAudioCaptureOptions: AudioCaptureOptions(
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        ),
+      ),
     );
+    _room = room;
+    _listener = room.createListener();
+    _wireEvents(room, _listener!);
+    _registerRpcMethods(room);
 
     try {
-      _channel = WebSocketChannel.connect(uri);
-      await _channel!.ready;
+      await room.connect(wsUrl, token).timeout(_connectTimeout);
+      await room.localParticipant?.setMicrophoneEnabled(true);
     } catch (e) {
-      _connectTimeoutTimer?.cancel();
       _phaseController.add(LiveCallPhase.error);
       onError?.call('Could not connect: $e');
+      await stop();
       return;
     }
 
-    final setupMessage = {
-      'setup': {
-        'model': 'models/$_model',
-        'generationConfig': {
-          'responseModalities': ['AUDIO'],
-          'speechConfig': {
-            'voiceConfig': {
-              'prebuiltVoiceConfig': {'voiceName': 'Kore'},
-            },
-          },
-        },
-        // Lets the server send back a transcript of what it heard the
-        // buyer say (handled below as inputTranscription) — without
-        // this, there's no way to show the buyer "haan, sun liya"
-        // confirmation, so any bit of lag makes it feel like their
-        // voice never reached the model at all, even though the audio
-        // was streaming the whole time.
-        'inputAudioTranscription': {},
-        'systemInstruction': {
-          'parts': [
-            {'text': systemPrompt},
-          ],
-        },
-        'tools': [
-          {
-            'functionDeclarations': [
-              {
-                'name': 'addToCart',
-                'description': "Adds the item the buyer asked for to their cart",
-                'parameters': {
-                  'type': 'OBJECT',
-                  'properties': {
-                    'productId': {
-                      'type': 'STRING',
-                      'description': 'The exact id from the catalog list above',
-                    },
-                    'quantity': {
-                      'type': 'INTEGER',
-                      'description': "How much they asked for; 1 if not said",
-                    },
-                  },
-                  'required': ['productId'],
-                },
-              },
-              {
-                'name': 'confirmOrder',
-                'description':
-                    'Called when the buyer confirms they want to place the order with whatever is currently in the cart',
-                'parameters': {'type': 'OBJECT', 'properties': {}},
-              },
-            ],
-          },
-        ],
-        // Tunes how Gemini decides when you've started/stopped talking —
-        // LOW sensitivity behaves more like a real call: it won't flinch
-        // at background noise, but still responds promptly on a pause.
-        'realtimeInputConfig': {
-          'automaticActivityDetection': {
-            'disabled': false,
-            // Was START_SENSITIVITY_HIGH — that's what was actually
-            // causing background noise (fan, TV, bazaar sounds) to get
-            // misread as "the buyer started talking", which triggers
-            // activityHandling below and cuts the AI off mid-sentence.
-            // LOW needs a clearer, more speech-like sound before it
-            // decides someone started talking, so stray noise stops
-            // false-triggering barge-in. A real "buyer talked over the
-            // AI" still gets caught fine — that's a much louder,
-            // clearer signal than ambient noise.
-            'startOfSpeechSensitivity': 'START_SENSITIVITY_LOW',
-            'endOfSpeechSensitivity': 'END_SENSITIVITY_LOW',
-            'prefixPaddingMs': 150,
-            'silenceDurationMs': 350,
-          },
-          'activityHandling': 'START_OF_ACTIVITY_INTERRUPTS',
-        },
-        // Enables the server to hand us SessionResumptionUpdate
-        // messages. Passing the last handle we were given makes THIS
-        // connection continue the previous one's memory instead of
-        // starting blank — omit `handle` on the very first connect of
-        // a call (nothing to resume yet), always include it after.
-        'sessionResumption': _sessionResumeHandle != null
-            ? {'handle': _sessionResumeHandle}
-            : <String, dynamic>{},
-        // Without this, an audio-only session is hard-capped at 15
-        // minutes of conversation total (token limit), full stop, no
-        // resumption trick gets around it. This lets Gemini quietly
-        // summarize/compress older turns once the context grows past
-        // triggerTokens, instead of the call just dying mid-order once
-        // the buyer's been chatting for a while.
-        'contextWindowCompression': {
-          'triggerTokens': '10000',
-          'slidingWindow': {'targetTokens': '2000'},
-        },
-      },
-    };
-    _channel!.sink.add(jsonEncode(setupMessage));
-
-    _wsSub = _channel!.stream.listen(
-      _handleServerMessage,
-      onError: (e) {
+    _agentJoinTimer = Timer(_agentJoinTimeout, () {
+      if (room.remoteParticipants.isEmpty) {
+        onError?.call('Assistant did not join. Please try again in a moment.');
         _phaseController.add(LiveCallPhase.error);
-        onError?.call('Connection error: $e');
-      },
-      onDone: () => _handleSocketClosed(),
-    );
-  }
-
-  void _handleSocketClosed() {
-    // A goAway swap already tore this subscription down deliberately
-    // via _reconnectForContinuity — skip the generic drop-handling
-    // below entirely so it doesn't show "Call ended" or double-connect.
-    if (_swappingForContinuity) return;
-
-    final code = _channel?.closeCode;
-    _micSub?.cancel();
-    _micSub = null;
-    _recorder.stop().catchError((_) => null);
-    _channel = null;
-
-    final unexpected = code != null && code != 1000;
-    if (!_manualDisconnect && unexpected && _reconnectAttempts < _maxReconnectAttempts) {
-      _reconnectAttempts++;
-      _phaseController.add(LiveCallPhase.connecting);
-      final key = _lastApiKey;
-      final prompt = _lastSystemPrompt;
-      Future.delayed(Duration(milliseconds: 800 * _reconnectAttempts), () {
-        if (_manualDisconnect || key == null || prompt == null) return;
-        _connect(apiKey: key, systemPrompt: prompt);
-      });
-      return;
-    }
-
-    if (!_manualDisconnect) {
-      onError?.call(unexpected ? 'Call dropped (code: $code)' : 'Call ended');
-    }
-    _phaseController.add(LiveCallPhase.ended);
-  }
-
-  /// Proactively swaps to a brand new connection when Gemini's `goAway`
-  /// warns the current one is about to be force-closed. Cancels the old
-  /// socket's own listener first so [_handleSocketClosed] never fires
-  /// for it — this is a deliberate, planned swap, not a drop, so none
-  /// of that method's "unexpected disconnect" handling should run.
-  bool _swappingForContinuity = false;
-  Future<void> _reconnectForContinuity() async {
-    if (_manualDisconnect || _swappingForContinuity) return;
-    final key = _lastApiKey;
-    final prompt = _lastSystemPrompt;
-    if (key == null || prompt == null) return;
-
-    _swappingForContinuity = true;
-    await _micSub?.cancel();
-    _micSub = null;
-    await _wsSub?.cancel();
-    _wsSub = null;
-    await _channel?.sink.close(1000);
-    _channel = null;
-    try {
-      await _recorder.stop();
-    } catch (_) {}
-
-    await _connect(apiKey: key, systemPrompt: prompt);
-    _swappingForContinuity = false;
-  }
-
-  void _handleServerMessage(dynamic raw) {
-    Map<String, dynamic> msg;
-    try {
-      final text = raw is String ? raw : utf8.decode(raw as List<int>);
-      msg = jsonDecode(text) as Map<String, dynamic>;
-    } catch (_) {
-      return;
-    }
-
-    if (msg.containsKey('error')) {
-      _phaseController.add(LiveCallPhase.error);
-      onError?.call('Server error: ${msg['error']}');
-      return;
-    }
-
-    // Server hands us a fresh handle roughly every time it's safe to
-    // do so — save the latest one so whichever connection comes next
-    // (proactive goAway swap, or a plain dropped-socket reconnect) can
-    // pick the conversation back up instead of starting over.
-    if (msg.containsKey('sessionResumptionUpdate')) {
-      final update = msg['sessionResumptionUpdate'] as Map<String, dynamic>;
-      if (update['resumable'] == true && update['newHandle'] != null) {
-        _sessionResumeHandle = update['newHandle'] as String;
+        stop();
       }
-      return;
-    }
-
-    // Google's ~60s warning before it force-closes this connection
-    // (the ~10 minute hard cap). Swap to a new connection right now,
-    // on our terms, using the resumption handle above — instead of
-    // waiting for the abrupt close and having the buyer hear dead air
-    // while the existing reconnect-on-drop logic kicks in.
-    if (msg.containsKey('goAway')) {
-      _reconnectForContinuity();
-      return;
-    }
-
-    if (msg.containsKey('setupComplete')) {
-      _connectTimeoutTimer?.cancel();
-      _setupComplete = true;
-      _reconnectAttempts = 0;
-      _startMicStreaming().catchError((e) {
-        _phaseController.add(LiveCallPhase.error);
-        onError?.call('Microphone streaming failed: $e');
-      });
-      _phaseController.add(LiveCallPhase.listening);
-      return;
-    }
-
-    if (msg.containsKey('toolCall')) {
-      final toolCall = msg['toolCall'] as Map<String, dynamic>;
-      final calls = toolCall['functionCalls'] as List<dynamic>? ?? [];
-      for (final raw in calls) {
-        final call = raw as Map<String, dynamic>;
-        final name = call['name'] as String?;
-        final id = call['id'] as String? ?? '';
-        final args = call['args'] as Map<String, dynamic>? ?? {};
-
-        if (name == 'addToCart') {
-          final productId = args['productId']?.toString() ?? '';
-          final quantity = int.tryParse(args['quantity']?.toString() ?? '1') ?? 1;
-          onOrderCall?.call(LiveOrderCall(functionCallId: id, productId: productId, quantity: quantity));
-          _sendToolResponse(id, 'addToCart', {'status': 'added'});
-        } else if (name == 'confirmOrder') {
-          onConfirmOrder?.call(LiveConfirmOrderCall(functionCallId: id));
-          // No response yet — the screen answers via respondToConfirmOrder
-          // once it's actually tried to place the order.
-        }
-      }
-      return;
-    }
-
-    final serverContent = msg['serverContent'] as Map<String, dynamic>?;
-    if (serverContent == null) return;
-
-    if (serverContent['interrupted'] == true) {
-      _handleBargeIn();
-    }
-
-    final outputTranscription = serverContent['outputTranscription'] as Map<String, dynamic>?;
-    if (outputTranscription != null && outputTranscription['text'] != null) {
-      onModelText?.call(outputTranscription['text'] as String);
-    }
-
-    // What the model heard the BUYER say — separate from
-    // outputTranscription above (that's the model's own reply). Surfaced
-    // so the call screen can show "सुन लिया: <text>" the instant it's
-    // heard, instead of the buyer having no idea their voice registered
-    // until the AI actually starts answering a few hundred ms later.
-    final inputTranscription = serverContent['inputTranscription'] as Map<String, dynamic>?;
-    if (inputTranscription != null && inputTranscription['text'] != null) {
-      onUserText?.call(inputTranscription['text'] as String);
-    }
-
-    final modelTurn = serverContent['modelTurn'] as Map<String, dynamic>?;
-    if (modelTurn != null) {
-      final parts = modelTurn['parts'] as List<dynamic>? ?? [];
-      for (final part in parts) {
-        final inlineData = (part as Map<String, dynamic>)['inlineData'] as Map<String, dynamic>?;
-        if (inlineData != null && inlineData['data'] != null) {
-          final bytes = base64Decode(inlineData['data'] as String);
-          _phaseController.add(LiveCallPhase.aiSpeaking);
-
-          // Track the gap since the last chunk — feeds _adaptCushion
-          // once this turn ends.
-          final now = DateTime.now();
-          if (_lastChunkArrival != null) {
-            _turnGapsMs.add(now.difference(_lastChunkArrival!).inMilliseconds);
-          }
-          _lastChunkArrival = now;
-
-          if (_reinitInProgress) {
-            // Buffer stream is mid-teardown from a barge-in — hold this
-            // chunk instead of feeding a stream that's being replaced.
-            _pendingAudio.add(bytes);
-          } else if (_bufferingTurn) {
-            // Building this turn's jitter-buffer cushion — accumulate,
-            // don't feed yet.
-            _jitterBuffer.add(bytes);
-            if (_jitterBuffer.length >= _cushionBytes) {
-              final cushion = _jitterBuffer.takeBytes();
-              _bufferingTurn = false;
-              _feedAudio(cushion);
-            }
-          } else {
-            _feedAudio(bytes);
-          }
-        }
-        final textPart = (part)['text'] as String?;
-        if (textPart != null && textPart.isNotEmpty) {
-          onModelText?.call(textPart);
-        }
-      }
-    }
-
-    if (serverContent['turnComplete'] == true) {
-      // Short replies can end before the cushion ever fills — flush
-      // whatever's left so the tail of the sentence isn't lost.
-      if (_jitterBuffer.length > 0) {
-        _feedAudio(_jitterBuffer.takeBytes());
-      }
-      _bufferingTurn = true; // ready to buffer next turn's cushion
-      _adaptCushion();
-      _phaseController.add(LiveCallPhase.listening);
-    }
-  }
-
-  /// Hands bytes to SoLoud's current buffer stream. Only called when
-  /// there's no reinit in flight (see `_reinitInProgress` above), so
-  /// `_playbackSource` is guaranteed to be the live, current-generation
-  /// stream — never one that's mid-teardown from a barge-in.
-  void _feedAudio(Uint8List bytes) {
-    if (_playbackSource != null) {
-      _player.addAudioDataStream(_playbackSource!, bytes);
-    }
-  }
-
-  /// Grows or shrinks next turn's jitter-buffer cushion based on how
-  /// choppy this turn's chunk arrivals were. Adjustments are gradual on
-  /// purpose — jumping the cushion around every turn would itself feel
-  /// inconsistent.
-  void _adaptCushion() {
-    if (_turnGapsMs.isNotEmpty) {
-      final avgGap = _turnGapsMs.reduce((a, b) => a + b) / _turnGapsMs.length;
-      final maxGap = _turnGapsMs.reduce((a, b) => a > b ? a : b);
-      if (avgGap > 120 || maxGap > 400) {
-        _cushionSeconds = (_cushionSeconds + 0.15).clamp(_minCushionSeconds, _maxCushionSeconds);
-      } else if (avgGap < 50 && maxGap < 150) {
-        _cushionSeconds = (_cushionSeconds - 0.05).clamp(_minCushionSeconds, _maxCushionSeconds);
-      }
-    }
-    _turnGapsMs.clear();
-    _lastChunkArrival = null;
-  }
-
-  /// The buyer started talking over the AI — Google's own barge-in
-  /// detection already stopped the model server-side; here we just
-  /// need to stop *our* playback immediately instead of finishing
-  /// whatever audio is already buffered, so it actually feels
-  /// interrupted rather than talking over them for another second.
-  Future<void> _handleBargeIn() async {
-    // Bump the generation and flag the reinit immediately, before any
-    // await below — any server message handled while this function is
-    // suspended on an await sees `_reinitInProgress == true` and parks
-    // its audio in `_pendingAudio` instead of racing this teardown.
-    _playbackGeneration++;
-    _reinitInProgress = true;
-    _jitterBuffer.clear();
-    _bufferingTurn = true; // ready to buffer the next (post-barge-in) turn's cushion
-    _turnGapsMs.clear();
-    _lastChunkArrival = null;
-
-    try {
-      if (_playbackHandle != null) {
-        await _player.stop(_playbackHandle!);
-      }
-      if (_playbackSource != null) {
-        await _player.disposeSource(_playbackSource!);
-      }
-      _playbackSource = await _player.setBufferStream(
-        sampleRate: 24000,
-        channels: Channels.mono,
-        format: BufferType.s16le,
-        bufferingType: BufferingType.released,
-        bufferingTimeNeeds: 0.1,
-      );
-      _playbackHandle = await _player.play(_playbackSource!);
-    } catch (e) {
-      // If any of the above throws (a real SoLoud hiccup), the call
-      // must not go silent forever waiting for a reinit that never
-      // finishes — surface it and still fall through to the `finally`
-      // below so _reinitInProgress is released and pending audio gets
-      // a chance to play on whatever source we ended up with.
-      onError?.call('Playback reinit failed: $e');
-    } finally {
-      // MUST run no matter what happened above — this is what used to
-      // leave the whole call permanently silent if setBufferStream/
-      // play ever threw: _reinitInProgress stuck at true means every
-      // future chunk piles into _pendingAudio and nothing ever plays
-      // again, with no visible error to explain why.
-      _reinitInProgress = false;
-      if (_pendingAudio.isNotEmpty) {
-        for (final bytes in _pendingAudio) {
-          _feedAudio(bytes);
-        }
-        _pendingAudio.clear();
-      }
-    }
-  }
-
-  Future<void> _startMicStreaming() async {
-    final micStream = await _recorder.startStream(const RecordConfig(
-      encoder: AudioEncoder.pcm16bits,
-      sampleRate: 16000,
-      numChannels: 1,
-      // These three run on-device, before any audio ever leaves the
-      // phone — they clean up the signal at the source instead of
-      // relying only on Gemini's server-side VAD to guess what's
-      // speech and what's a fan/TV/street noise in the background.
-      // echoCancel matters most on speaker calls: without it, the
-      // mic picks the AI's own voice back up off the speaker and the
-      // model reacts to itself as if the buyer just spoke.
-      noiseSuppress: true,
-      echoCancel: true,
-      autoGain: true,
-    ));
-    _micSub = micStream.listen((chunk) {
-      // Mic keeps recording while muted (instant unmute, no restart)
-      // but a muted buyer's audio shouldn't reach the model at all.
-      if (_isMuted || _channel == null) return;
-
-      // Quiets steady background noise (fan/traffic/bazaar hum) before
-      // it ever reaches Gemini's own VAD, so it stops getting
-      // misread as "the buyer started talking" and cutting the AI
-      // off mid-sentence. Real speech passes through untouched — see
-      // _MicNoiseGate for why this catches what server-side
-      // sensitivity tuning alone can't.
-      final gated = _noiseGate.process(chunk);
-
-      final message = {
-        'realtimeInput': {
-          'audio': {
-            'data': base64Encode(gated),
-            'mimeType': 'audio/pcm;rate=16000',
-          },
-        },
-      };
-      _channel?.sink.add(jsonEncode(message));
     });
   }
 
-  void _sendToolResponse(String id, String name, Map<String, dynamic> response) {
-    _channel?.sink.add(jsonEncode({
-      'toolResponse': {
-        'functionResponses': [
-          {'id': id, 'name': name, 'response': response},
-        ],
-      },
-    }));
+  void _registerRpcMethods(Room room) {
+    room.localParticipant?.registerRpcMethod('addToCart', (data) async {
+      try {
+        final args = jsonDecode(data.payload) as Map<String, dynamic>;
+        final productId = args['productId']?.toString() ?? '';
+        final quantity = int.tryParse(args['quantity']?.toString() ?? '1') ?? 1;
+        onOrderCall?.call(LiveOrderCall(
+          functionCallId: data.requestId,
+          productId: productId,
+          quantity: quantity,
+        ));
+        return jsonEncode({'status': 'added'});
+      } catch (e) {
+        return jsonEncode({'status': 'failed'});
+      }
+    });
+
+    room.localParticipant?.registerRpcMethod('confirmOrder', (data) async {
+      final completer = Completer<String>();
+      _pendingConfirmations[data.requestId] = completer;
+      onConfirmOrder?.call(LiveConfirmOrderCall(functionCallId: data.requestId));
+      return completer.future.timeout(
+        const Duration(seconds: 25),
+        onTimeout: () {
+          _pendingConfirmations.remove(data.requestId);
+          return jsonEncode({'status': 'failed'});
+        },
+      );
+    });
   }
 
-  /// Answers a pending confirmOrder tool call once the screen has
-  /// actually tried to place the order (or found the cart empty /
-  /// location undetectable). [status] should be one of "success",
-  /// "empty", "location_error", or "failed" — the system prompt tells
-  /// the model what to say for each.
+  void _wireEvents(Room room, EventsListener<RoomEvent> listener) {
+    listener
+      ..on<RoomDisconnectedEvent>((event) {
+        _phaseController.add(LiveCallPhase.ended);
+      })
+      ..on<ParticipantConnectedEvent>((event) {
+        _agentJoinTimer?.cancel();
+        _phaseController.add(LiveCallPhase.listening);
+      })
+      ..on<ActiveSpeakersChangedEvent>((event) {
+        final agentSpeaking = event.speakers.any((p) => p is RemoteParticipant);
+        _phaseController.add(agentSpeaking ? LiveCallPhase.aiSpeaking : LiveCallPhase.listening);
+      })
+      ..on<DataReceivedEvent>((event) {
+        try {
+          final msg = jsonDecode(utf8.decode(event.data)) as Map<String, dynamic>;
+          final text = msg['text'] as String?;
+          if (text == null) return;
+          if (msg['type'] == 'model') {
+            onModelText?.call(text);
+          } else if (msg['type'] == 'user') {
+            onUserText?.call(text);
+          }
+        } catch (_) {}
+      });
+  }
+
   void respondToConfirmOrder(String functionCallId, String status) {
-    _sendToolResponse(functionCallId, 'confirmOrder', {'status': status});
+    _pendingConfirmations.remove(functionCallId)?.complete(jsonEncode({'status': status}));
   }
 
-  /// Ends the call — stops the mic, closes the socket, stops playback.
   Future<void> stop() async {
-    _manualDisconnect = true;
-    _sessionResumeHandle = null;
-    _connectTimeoutTimer?.cancel();
-    _connectTimeoutTimer = null;
-    // Bump the generation so anything still in flight for this call
-    // (a queued reinit, pending audio) is recognised as stale by any
-    // late callback and never touches the next call's fresh state.
-    _playbackGeneration++;
-    _reinitInProgress = false;
-    _pendingAudio.clear();
-    _jitterBuffer.clear();
-    _bufferingTurn = true;
-    _turnGapsMs.clear();
-    _lastChunkArrival = null;
-    await _micSub?.cancel();
-    _micSub = null;
-    try {
-      await _recorder.stop();
-    } catch (_) {}
-    await _wsSub?.cancel();
-    _wsSub = null;
-    await _channel?.sink.close();
-    _channel = null;
-    if (_playbackHandle != null) {
-      await _player.stop(_playbackHandle!);
-      _playbackHandle = null;
+    _agentJoinTimer?.cancel();
+    _agentJoinTimer = null;
+    for (final completer in _pendingConfirmations.values) {
+      if (!completer.isCompleted) completer.complete(jsonEncode({'status': 'failed'}));
     }
-    if (_playbackSource != null) {
-      await _player.disposeSource(_playbackSource!);
-      _playbackSource = null;
-    }
+    _pendingConfirmations.clear();
+    await _listener?.dispose();
+    _listener = null;
+    await _room?.disconnect();
+    await _room?.dispose();
+    _room = null;
     _phaseController.add(LiveCallPhase.ended);
   }
 
   void dispose() {
     stop();
-    _recorder.dispose();
     _phaseController.close();
     _muteController.close();
   }
