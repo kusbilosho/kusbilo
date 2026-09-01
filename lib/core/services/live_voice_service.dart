@@ -158,7 +158,7 @@ class LiveVoiceService {
   }
 
   void _registerRpcMethods(Room room) {
-    room.localParticipant?.registerRpcMethod('addToCart', (data) async {
+    room.registerRpcMethod('addToCart', (data) async {
       try {
         final args = jsonDecode(data.payload) as Map<String, dynamic>;
         final productId = args['productId']?.toString() ?? '';
@@ -174,7 +174,7 @@ class LiveVoiceService {
       }
     });
 
-    room.localParticipant?.registerRpcMethod('confirmOrder', (data) async {
+    room.registerRpcMethod('confirmOrder', (data) async {
       final completer = Completer<String>();
       _pendingConfirmations[data.requestId] = completer;
       onConfirmOrder?.call(LiveConfirmOrderCall(functionCallId: data.requestId));
