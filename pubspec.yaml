@@ -53,9 +53,7 @@ dependencies:
   # WebSocket (same protocol DevMate AI uses). The API key is set once
   # in the web admin panel and read from Firestore
   # (config/geminiLiveApi.apiKey) — buyers never see or enter a key.
-  web_socket_channel: ^3.0.1
-  record: ^6.2.1
-  flutter_soloud: ^3.5.4
+  livekit_client: ^2.4.5
 
   # Location auto-detect — geolocator reads GPS (free, OS-level),
   # geocoding turns coordinates into a village/district address using
