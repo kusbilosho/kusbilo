@@ -1,10 +1,4 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-<!--
-  Ye lines apni asli file "android/app/src/main/AndroidManifest.xml" me
-  daalo — <manifest> tag ke andar, <application> tag SE PEHLE.
-  (<application> tag jaisa hai waisa hi rehne do, bas ye permissions
-  uske upar add kar do.)
--->
 
 <uses-permission android:name="android.permission.INTERNET" />
 
