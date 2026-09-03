@@ -38,6 +38,17 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # Recreates android/key.properties from GitHub Secrets before the
+      # build — this file is gitignored (contains the keystore password)
+      # so it never lives in the repo, but the signed release build
+      # still needs it locally on the CI runner.
+      - name: Set up signing config
+        run: |
+          echo "storeFile=my-release-key.jks" > android/key.properties
+          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" >> android/key.properties
+          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/key.properties
+          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/key.properties
+
       - name: Build release APK
         run: flutter build apk --release --split-per-abi
 
@@ -46,3 +57,15 @@ jobs:
         with:
           name: gaonhaat-release-apk
           path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+
+      # Play Store needs an .aab (App Bundle), not an .apk, for
+      # production uploads — this is the file you'll actually submit
+      # in Play Console.
+      - name: Build release App Bundle
+        run: flutter build appbundle --release
+
+      - name: Upload App Bundle as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kusbilo-release-aab
+          path: build/app/outputs/bundle/release/app-release.aab
