@@ -1,0 +1,32 @@
+# Signing / secrets — never commit these
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
+*.p12
+*.pem
+
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/build/
+*.iml
+.idea/
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+
+# macOS/Windows junk
+.DS_Store
+Thumbs.db
