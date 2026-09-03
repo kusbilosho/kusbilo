@@ -1,8 +1,19 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
     id("com.google.gms.google-services")
+}
+
+// Keystore credentials are read from android/key.properties (gitignored),
+// not hardcoded here, so they never get committed to version control.
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -30,10 +41,12 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file("my-release-key.jks")
-            storePassword = "Mohd@arman0786" // Yahan apna password daalein
-            keyAlias = "my-alias"           // Yahan apna alias daalein
-            keyPassword = "Mohd@arman0786"   // Yahan apna password daalein
+            if (keystorePropertiesFile.exists()) {
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            }
         }
     }
 
