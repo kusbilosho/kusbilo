@@ -29,11 +29,6 @@ dependencies:
   # Product photos + push notifications for new orders — both needed
   # for the merchant listing/order-routing features.
   firebase_storage: ^13.4.5
-  # image_picker removed — not used anywhere yet in this app. Add it
-  # back (with the matching Android permissions below) only once a real
-  # photo-upload feature is built and shipped in the same release —
-  # Play Store review flags/rejects apps that request permissions they
-  # don't actually use.
   firebase_messaging: ^16.4.3
   # Persists every downloaded product/category photo to disk so it's
   # only ever fetched over the network once — without this, plain
@@ -57,9 +52,7 @@ dependencies:
   # WebSocket (same protocol DevMate AI uses). The API key is set once
   # in the web admin panel and read from Firestore
   # (config/geminiLiveApi.apiKey) — buyers never see or enter a key.
-  web_socket_channel: ^3.0.1
-  record: ^6.2.1
-  flutter_soloud: ^3.5.4
+  livekit_client: ^2.4.5
 
   # Location auto-detect — geolocator reads GPS (free, OS-level),
   # geocoding turns coordinates into a village/district address using
