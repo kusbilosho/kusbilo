@@ -56,7 +56,10 @@ class LiveVoiceService {
 
   bool get isActive => _room != null;
 
-  void Function(LiveOrderCall call)? onOrderCall;
+  /// Returns whether the product was actually found and added — the
+  /// caller (RPC handler) reports this back to the model so it never
+  /// thinks something was added when it wasn't.
+  bool Function(LiveOrderCall call)? onOrderCall;
   void Function(LiveConfirmOrderCall call)? onConfirmOrder;
   void Function(String text)? onModelText;
   void Function(String text)? onUserText;
@@ -163,12 +166,20 @@ class LiveVoiceService {
         final args = jsonDecode(data.payload) as Map<String, dynamic>;
         final productId = args['productId']?.toString() ?? '';
         final quantity = int.tryParse(args['quantity']?.toString() ?? '1') ?? 1;
-        onOrderCall?.call(LiveOrderCall(
-          functionCallId: data.requestId,
-          productId: productId,
-          quantity: quantity,
-        ));
-        return jsonEncode({'status': 'added'});
+        final added = onOrderCall?.call(LiveOrderCall(
+              functionCallId: data.requestId,
+              productId: productId,
+              quantity: quantity,
+            )) ??
+            false;
+        // Telling the model "added" when the product id didn't actually
+        // match anything in the cart used to leave the cart silently
+        // empty later — the model would think the order was ready while
+        // there was nothing to confirm. Now the model finds out
+        // immediately and can correct itself (retry, or tell the buyer
+        // that item isn't available) instead of the whole order call
+        // going quiet.
+        return jsonEncode({'status': added ? 'added' : 'not_found'});
       } catch (e) {
         return jsonEncode({'status': 'failed'});
       }
