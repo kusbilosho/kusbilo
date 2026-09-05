@@ -996,6 +996,18 @@ class AppStrings {
       ? 'वॉइस कॉल अभी सेटअप हो रही है, थोड़ी देर बाद कोशिश करें।'
       : 'Voice call is still being set up — please try again in a bit.';
 
+  String get liveCallEmptyCartError => _isHindi
+      ? 'कार्ट में कोई सामान नहीं जुड़ा — कृपया दोबारा कोशिश करें और सामान बोलकर बताएं।'
+      : "Nothing was added to your cart — please try again and tell us what you'd like.";
+
+  String get liveCallLocationError => _isHindi
+      ? 'आपकी लोकेशन नहीं मिल पाई। लोकेशन की अनुमति चालू करके दोबारा कोशिश करें।'
+      : "Couldn't get your location. Please turn on location access and try again.";
+
+  String get liveCallOrderFailedError => _isHindi
+      ? 'ऑर्डर नहीं हो पाया, कृपया दोबारा कोशिश करें।'
+      : "Your order couldn't be placed, please try again.";
+
   // ---- Turn-based voice ordering (listen -> think -> speak loop) ----
 
   String get voiceListeningLabel => _isHindi ? 'सुन रहे हैं... बोलिए' : 'Listening... go ahead';
