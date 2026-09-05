@@ -125,11 +125,11 @@ class _LiveCallSheetState extends State<_LiveCallSheet> with TickerProviderState
     }
   }
 
-  void _handleOrderCall(LiveOrderCall call) {
-    if (_ended || !mounted) return;
+  bool _handleOrderCall(LiveOrderCall call) {
+    if (_ended || !mounted) return false;
     final catalog = context.read<CatalogProvider>();
     final product = catalog.productById(call.productId);
-    if (product == null) return;
+    if (product == null) return false;
 
     final cart = context.read<CartProvider>();
     for (var i = 0; i < call.quantity; i++) {
@@ -141,6 +141,7 @@ class _LiveCallSheetState extends State<_LiveCallSheet> with TickerProviderState
     setState(() {
       _addedLines.add(strings.liveCallItemAdded(product.name(lang), call.quantity));
     });
+    return true;
   }
 
   /// Mirrors the old voice-order sheet's checkout flow: builds order
@@ -153,8 +154,16 @@ class _LiveCallSheetState extends State<_LiveCallSheet> with TickerProviderState
     if (_ended || !mounted) return;
     final cart = context.read<CartProvider>();
     final catalog = context.read<CatalogProvider>();
+    final strings = context.read<LocaleProvider>().strings;
 
     if (cart.isEmpty) {
+      // Used to just return here silently — the buyer would hear the AI
+      // say it's confirming while the screen showed nothing at all, with
+      // no way to tell what went wrong. Now it's a visible error state.
+      setState(() {
+        _phase = LiveCallPhase.error;
+        _errorText = strings.liveCallEmptyCartError;
+      });
       _service.respondToConfirmOrder(call.functionCallId, 'empty');
       return;
     }
@@ -166,7 +175,11 @@ class _LiveCallSheetState extends State<_LiveCallSheet> with TickerProviderState
       location = await LocationService.detectCurrentLocation();
     } catch (_) {
       if (!mounted) return;
-      setState(() => _placingOrder = false);
+      setState(() {
+        _placingOrder = false;
+        _phase = LiveCallPhase.error;
+        _errorText = strings.liveCallLocationError;
+      });
       _service.respondToConfirmOrder(call.functionCallId, 'location_error');
       return;
     }
@@ -196,6 +209,14 @@ class _LiveCallSheetState extends State<_LiveCallSheet> with TickerProviderState
     setState(() => _placingOrder = false);
 
     if (order == null) {
+      // Used to also just return silently here — same problem, worse
+      // stakes: the buyer thinks their order went through when it
+      // didn't. Now it's shown plainly, with a way to see why via
+      // orderProvider.errorMessage in logs/crash reporting.
+      setState(() {
+        _phase = LiveCallPhase.error;
+        _errorText = strings.liveCallOrderFailedError;
+      });
       _service.respondToConfirmOrder(call.functionCallId, 'failed');
       return;
     }
