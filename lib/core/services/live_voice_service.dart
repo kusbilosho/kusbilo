@@ -35,7 +35,7 @@ class NoApiKeyConfiguredException implements Exception {
 }
 
 class LiveVoiceService {
-  static const String _model = 'gemini-2.5-flash-native-audio-preview-12-2025';
+  static const String _model = 'gemini-3.1-flash-live-preview';
   static const int _sampleRateOut = 24000;
   static const int _sampleRateIn = 16000;
   static const int _bytesPerSample = 2;
