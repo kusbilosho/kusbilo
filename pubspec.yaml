@@ -1,7 +1,7 @@
 name: kusbilo
 description: Kusbilo — Aapke gaon ka bazaar, ab app mein.
 publish_to: "none"
-version: 0.1.2+6
+version: 0.1.3+7
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -52,7 +52,9 @@ dependencies:
   # WebSocket (same protocol DevMate AI uses). The API key is set once
   # in the web admin panel and read from Firestore
   # (config/geminiLiveApi.apiKey) — buyers never see or enter a key.
-  livekit_client: ^2.4.5
+  web_socket_channel: ^3.0.3
+  record: ^6.0.0
+  flutter_pcm_sound: ^3.1.0
 
   # Location auto-detect — geolocator reads GPS (free, OS-level),
   # geocoding turns coordinates into a village/district address using
