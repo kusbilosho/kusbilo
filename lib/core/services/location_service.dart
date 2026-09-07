@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -54,9 +56,7 @@ class LocationService {
       throw const LocationFailure(LocationFailureReason.permissionDeniedForever);
     }
 
-    final position = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-    );
+    final position = await _getPositionWithFallback();
 
     final label = await _reverseGeocode(position.latitude, position.longitude);
 
@@ -65,6 +65,37 @@ class LocationService {
       longitude: position.longitude,
       label: label,
     );
+  }
+
+  /// A high-accuracy GPS fix has no upper bound on its own — indoors or
+  /// in low-signal rural areas it can take well over a minute. During a
+  /// live voice call, [detectCurrentLocation] sits on the critical path
+  /// of order confirmation, which the voice agent only waits ~25s for;
+  /// past that it gives up and tells the buyer there was a technical
+  /// problem, even though the app was still working in the background.
+  /// So: try a high-accuracy fix with a short time budget first, and if
+  /// that doesn't land in time, fall back to the last known position
+  /// (near-instant) or, failing that, a faster medium-accuracy read —
+  /// coordinates a little less precise are far better than the order
+  /// silently timing out.
+  static Future<Position> _getPositionWithFallback() async {
+    try {
+      return await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 8),
+        ),
+      );
+    } on TimeoutException {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null) return last;
+      return Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 6),
+        ),
+      );
+    }
   }
 
   static Future<String> _reverseGeocode(double lat, double lng) async {
