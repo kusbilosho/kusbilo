@@ -1,7 +1,7 @@
 name: kusbilo
 description: Kusbilo — Aapke gaon ka bazaar, ab app mein.
 publish_to: "none"
-version: 0.1.2+5
+version: 0.1.2+6
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
