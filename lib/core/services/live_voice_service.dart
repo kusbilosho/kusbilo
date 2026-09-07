@@ -323,7 +323,10 @@ Rules:
   }
 
   void _handleSocketClosed() {
-    final code = _channel?.closeCode;
+  final code = _channel?.closeCode;
+  final reason = _channel?.closeReason;
+  print('WebSocket closed: code=$code, reason=$reason');
+  // baaki code same
 
     if (_isRefreshingSession) {
       _isRefreshingSession = false;
