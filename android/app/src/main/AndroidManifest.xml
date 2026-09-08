@@ -15,6 +15,13 @@
 <!-- Voice ordering (speech_to_text) -->
 <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+<!-- Live voice call: required for the record package to switch the
+     device into voice-call audio mode and manage the Bluetooth SCO
+     connection so a connected headset's mic/speaker are used instead of
+     the phone's own — without this, echo cancellation and Bluetooth
+     headsets are noticeably weaker during the live call. -->
+<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
 <!-- Camera + photo-library permissions removed — image_picker isn't
      used anywhere in this app yet. Re-add both only alongside the
      actual feature that needs them (e.g. review photos), in the same
