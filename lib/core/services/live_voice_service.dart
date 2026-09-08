@@ -523,13 +523,16 @@ Rules:
         _phaseController.add(LiveCallPhase.error);
       });
       _phaseController.add(LiveCallPhase.listening);
+      final kickoff = _lastIsHindi
+          ? 'खरीदार को छोटा सा स्वागत करो और पूछो कि आज क्या ऑर्डर करना है। सिर्फ हिंदी में बोलो।'
+          : "Greet the buyer briefly and ask what they'd like to order today. Speak only in English.";
       _send({
         'clientContent': {
           'turns': [
             {
               'role': 'user',
               'parts': [
-                {'text': "Greet the buyer briefly and ask what they'd like to order today."}
+                {'text': kickoff}
               ],
             }
           ],
