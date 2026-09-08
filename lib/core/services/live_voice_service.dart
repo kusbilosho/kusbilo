@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:cloud_functions/cloud_functions.dart';
@@ -39,6 +40,9 @@ class LiveVoiceService {
   static const int _sampleRateOut = 24000;
   static const int _sampleRateIn = 16000;
   static const int _bytesPerSample = 2;
+
+  static const MethodChannel _audioModeChannel = MethodChannel('kusbilo/audio_mode');
+  bool _audioSessionConfigured = false;
 
   WebSocketChannel? _channel;
   StreamSubscription<Uint8List>? _micSub;
@@ -116,6 +120,18 @@ class LiveVoiceService {
   void toggleMute() {
     _isMuted = !_isMuted;
     _muteController.add(_isMuted);
+  }
+
+  Future<void> _setupAudioSession() async {
+    try {
+      if (Platform.isAndroid) {
+        await _audioModeChannel.invokeMethod('setAudioMode');
+      } else if (Platform.isIOS) {
+        await _audioModeChannel.invokeMethod('setupAudioSession');
+      }
+    } catch (e) {
+      onError?.call('Could not configure call audio — echo cancellation may be weaker: $e');
+    }
   }
 
   Future<void> start(
@@ -235,6 +251,11 @@ Rules:
   }
 
   Future<void> _connect() async {
+    if (!_audioSessionConfigured) {
+      await _setupAudioSession();
+      _audioSessionConfigured = true;
+    }
+
     final fetched = await _fetchTokenAndInstructions();
     if (fetched == null) return;
     final token = fetched.token;
