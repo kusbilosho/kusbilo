@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_nnnoiseless/flutter_nnnoiseless.dart';
 import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 import 'package:record/record.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -90,6 +91,16 @@ class LiveVoiceService {
   Future<void> _feedChain = Future.value();
   bool _aiIsSpeaking = false;
 
+  // --- Mic-side noise suppression (RNNoise, via flutter_nnnoiseless) ---
+  // OS-level echoCancel/noiseSuppress (RecordConfig below) only catches
+  // steady background hiss. A neural denoiser recognizes "this is a human
+  // voice" vs. everything else, so it also kills non-steady noise — a
+  // horn, a dog bark, someone else talking nearby — that the OS-level
+  // toggle lets straight through. Every mic chunk is denoised BEFORE it's
+  // sent to Gemini, so the AI only ever hears clean speech.
+  NoiselessSession? _denoiser;
+  Future<void> _micChain = Future.value();
+
   static const double _minCushionSeconds = 0.25;
   static const double _maxCushionSeconds = 1.0;
   double _cushionSeconds = _minCushionSeconds;
@@ -107,6 +118,7 @@ class LiveVoiceService {
   }
 
   static const double _speechAmplitudeThreshold = 3000 / 32767;
+  static const double _voiceProbabilityThreshold = 0.6;
   double _peakAmplitude(Uint8List chunk) {
     final samples = ByteData.sublistView(chunk);
     var peak = 0;
@@ -398,6 +410,9 @@ Rules:
     _micSub?.cancel();
     _micSub = null;
     _recorder.stop().catchError((_) => null);
+    _denoiser?.dispose();
+    _denoiser = null;
+    _micChain = Future.value();
   }
 
   void _scheduleSessionRefresh() {
@@ -414,6 +429,7 @@ Rules:
   }
 
   Future<void> _startMicStreaming() async {
+    _denoiser = await NoiselessSession.create(sampleRate: _sampleRateIn);
     final stream = await _recorder.startStream(const RecordConfig(
       encoder: AudioEncoder.pcm16bits,
       sampleRate: _sampleRateIn,
@@ -425,15 +441,37 @@ Rules:
     _micSub = stream.listen((chunk) {
       if (_channel == null || _isMuted) return;
 
-      final amplitude = _peakAmplitude(chunk);
-      if (_aiIsSpeaking && amplitude > _speechAmplitudeThreshold) {
-        _handleBargeIn();
-      }
+      // Chain each chunk's denoise+send so chunks always leave in the
+      // order they arrived, even though denoising is async.
+      _micChain = _micChain.then((_) async {
+        final denoiser = _denoiser;
+        if (denoiser == null || _channel == null) return;
 
-      _send({
-        'realtimeInput': {
-          'audio': {'mimeType': 'audio/pcm;rate=$_sampleRateIn', 'data': base64Encode(chunk)},
-        },
+        Uint8List clean;
+        double voiceProbability;
+        try {
+          final result = await denoiser.process(chunk);
+          clean = result.audio;
+          voiceProbability = result.voiceProbability;
+        } catch (_) {
+          // Denoiser hiccup — fall back to the raw chunk rather than
+          // dropping audio and breaking the call.
+          clean = chunk;
+          voiceProbability = _peakAmplitude(chunk) > _speechAmplitudeThreshold ? 1.0 : 0.0;
+        }
+
+        // Real speech probability instead of a raw amplitude peak — a
+        // loud non-voice noise (door slam, horn) no longer triggers a
+        // false barge-in.
+        if (_aiIsSpeaking && voiceProbability > _voiceProbabilityThreshold) {
+          _handleBargeIn();
+        }
+
+        _send({
+          'realtimeInput': {
+            'audio': {'mimeType': 'audio/pcm;rate=$_sampleRateIn', 'data': base64Encode(clean)},
+          },
+        });
       });
     });
   }
