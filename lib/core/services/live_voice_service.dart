@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:audio_session/audio_session.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_nnnoiseless/flutter_nnnoiseless.dart';
@@ -44,6 +45,19 @@ class LiveVoiceService {
 
   static const MethodChannel _audioModeChannel = MethodChannel('kusbilo/audio_mode');
   bool _audioSessionConfigured = false;
+
+  // --- Audio focus + interruption handling (real phone call, another app
+  // grabbing audio, etc.) ---
+  // The native platform channel above puts the OS into "voice call" mode,
+  // but never actually REQUESTS audio focus — so nothing tells this app
+  // when a real phone call rings in or another app grabs the speaker.
+  // audio_session does both: requesting focus with the same "voice
+  // communication" attributes as a real VoIP call, and giving us a
+  // callback for exactly those interruptions so we can pause the mic
+  // instead of talking over a real call or capturing ringtone audio.
+  AudioSession? _audioSession;
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
+  bool _autoMutedByInterruption = false;
 
   WebSocketChannel? _channel;
   StreamSubscription<Uint8List>? _micSub;
@@ -110,13 +124,6 @@ class LiveVoiceService {
   DateTime? _lastChunkArrival;
   final List<int> _turnGapsMs = [];
 
-  DateTime? _turnPlaybackStart;
-  int _turnBytesFed = 0;
-  void _resetFeedPacing() {
-    _turnPlaybackStart = null;
-    _turnBytesFed = 0;
-  }
-
   static const double _speechAmplitudeThreshold = 3000 / 32767;
   static const double _voiceProbabilityThreshold = 0.6;
   double _peakAmplitude(Uint8List chunk) {
@@ -143,6 +150,54 @@ class LiveVoiceService {
       }
     } catch (e) {
       onError?.call('Could not configure call audio — echo cancellation may be weaker: $e');
+    }
+
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth |
+            AVAudioSessionCategoryOptions.defaultToSpeaker,
+        avAudioSessionMode: AVAudioSessionMode.voiceChat,
+        avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
+        avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.speech,
+          usage: AndroidAudioUsage.voiceCommunication,
+        ),
+        // Exclusive focus, like a real phone call — other apps' audio should
+        // stop or duck for us, not play over us.
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+        androidWillPauseWhenDucked: false,
+      ));
+      // Actually requests audio focus (Android) / activates the session
+      // (iOS) — without this, `interruptionEventStream` below never fires,
+      // because the OS only tells you about focus you actually hold.
+      await session.setActive(true);
+      _audioSession = session;
+      _interruptionSub = session.interruptionEventStream.listen(_handleAudioInterruption);
+    } catch (e) {
+      // Non-fatal — the call still works, it just won't gracefully duck for
+      // a real incoming call or another app's audio.
+      onError?.call('Could not set up call audio focus: $e');
+    }
+  }
+
+  void _handleAudioInterruption(AudioInterruptionEvent event) {
+    if (event.begin) {
+      // A real phone call, Siri, another app's voice prompt, etc. is taking
+      // over. Stop sending mic audio so we don't talk over it or capture
+      // its sound — but don't touch _isMuted if the buyer had already
+      // muted themself, so we don't un-mute them by mistake once it ends.
+      if (!_isMuted) {
+        _autoMutedByInterruption = true;
+        _isMuted = true;
+        _muteController.add(_isMuted);
+      }
+    } else if (_autoMutedByInterruption) {
+      _autoMutedByInterruption = false;
+      _isMuted = false;
+      _muteController.add(_isMuted);
     }
   }
 
@@ -437,6 +492,19 @@ Rules:
       echoCancel: true,
       noiseSuppress: true,
       autoGain: true,
+      androidConfig: AndroidRecordConfig(
+        // The mic source real VoIP apps use — engages the phone's own
+        // call-grade AEC/NS/AGC in the audio HAL itself, underneath our
+        // app-level effects above and the RNNoise pass below, instead of
+        // capturing from the plain mic source and relying on the app-level
+        // effects alone.
+        audioSource: AndroidAudioSource.voiceCommunication,
+        audioManagerMode: AudioManagerMode.modeInCommunication,
+        // Route to a connected Bluetooth headset's mic (SCO) if there is
+        // one, instead of silently falling back to the phone's own mic.
+        manageBluetooth: true,
+        speakerphone: false,
+      ),
     ));
     _micSub = stream.listen((chunk) {
       if (_channel == null || _isMuted) return;
@@ -492,7 +560,6 @@ Rules:
     _reinitInProgress = true;
     _playbackGeneration++;
     _pendingAudio.clear();
-    _resetFeedPacing();
     try {
       await FlutterPcmSound.release();
       await FlutterPcmSound.setup(sampleRate: _sampleRateOut, channelCount: 1);
@@ -508,20 +575,19 @@ Rules:
     _pendingAudio.clear();
   }
 
+  // Chunks are handed to the native player as soon as they've cleared the
+  // jitter buffer, in arrival order (via the chained Future below) — no
+  // artificial pacing here. Real device audio output already drains its
+  // buffer at exactly the hardware sample rate on its own clock, so
+  // hand-rolling a second, Dart-Timer-based pacer on top of that just adds
+  // a second, *less* precise clock into the pipeline: any GC pause or UI
+  // frame jank on the Dart side becomes an audible micro-stutter that the
+  // native buffer alone would never have produced. Handing chunks over
+  // immediately lets the OS's own real-time audio clock do the pacing.
   void _queueFeed(Uint8List bytes) {
     final generation = _playbackGeneration;
-    _feedChain = _feedChain.then((_) async {
-      if (generation != _playbackGeneration) return;
-      _turnPlaybackStart ??= DateTime.now();
-      _turnBytesFed += bytes.length;
-      final audioSecondsFed = _turnBytesFed / (_sampleRateOut * _bytesPerSample);
-      final wallSecondsElapsed = DateTime.now().difference(_turnPlaybackStart!).inMilliseconds / 1000;
-      final lead = audioSecondsFed - wallSecondsElapsed;
-      final maxLead = _cushionSeconds + 1.0;
-      if (lead > maxLead) {
-        await Future.delayed(Duration(milliseconds: ((lead - maxLead) * 1000).round()));
-      }
-      if (generation != _playbackGeneration) return;
+    _feedChain = _feedChain.then((_) {
+      if (generation != _playbackGeneration) return Future.value();
       return FlutterPcmSound.feed(PcmArrayInt16(bytes: bytes.buffer.asByteData()))
           .catchError((e) => onError?.call('Audio feed failed: $e'));
     });
@@ -607,7 +673,6 @@ Rules:
           _jitterBuffer.add(bytes);
           if (_jitterBuffer.length >= _cushionBytes) {
             final cushion = _jitterBuffer.takeBytes();
-            _resetFeedPacing();
             _queueFeed(cushion);
             _bufferingTurn = false;
           }
@@ -683,6 +748,14 @@ Rules:
     }
     _pendingConfirmations.clear();
     _teardownMicOnly();
+    await _interruptionSub?.cancel();
+    _interruptionSub = null;
+    try {
+      await _audioSession?.setActive(false);
+    } catch (_) {
+      // Best-effort — don't block call teardown on this.
+    }
+    _audioSession = null;
     await _wsSub?.cancel();
     _wsSub = null;
     await _channel?.sink.close();
