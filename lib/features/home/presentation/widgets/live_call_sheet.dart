@@ -1,463 +1,663 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
-import '../../../../core/localization/app_strings.dart';
-import '../../../../core/localization/locale_provider.dart';
-import '../../../../core/services/live_voice_service.dart';
-import '../../../../core/services/location_service.dart';
-import '../../../../core/theme/app_colors.dart';
-import '../../../../core/theme/app_text_styles.dart';
-import '../../../cart/presentation/providers/cart_provider.dart';
-import '../../../order/data/models/order_item.dart';
-import '../../../order/presentation/providers/order_provider.dart';
-import '../../../order/presentation/screens/order_success_screen.dart';
-import '../../data/catalog_provider.dart';
+import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
+import 'package:record/record.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
-/// Opens as a bottom sheet from the mic button on Home — a real
-/// continuous live call over a direct Gemini Live API WebSocket, not
-/// the old turn-based listen → think → speak loop. The buyer can talk
-/// naturally, interrupt mid-reply, ask items to be added to the cart,
-/// ask general questions about the app, and finish by asking to place
-/// the order — all in one open conversation.
-Future<void> showLiveCallSheet(BuildContext context) {
-  return showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    isDismissible: false,
-    enableDrag: false,
-    backgroundColor: Colors.transparent,
-    builder: (_) => const _LiveCallSheet(),
-  );
+import '../localization/app_strings.dart';
+import '../../features/home/data/models/product.dart';
+
+class LiveOrderCall {
+  final String functionCallId;
+  final String productId;
+  final int quantity;
+  const LiveOrderCall({
+    required this.functionCallId,
+    required this.productId,
+    required this.quantity,
+  });
 }
 
-class _LiveCallSheet extends StatefulWidget {
-  const _LiveCallSheet();
+class LiveConfirmOrderCall {
+  final String functionCallId;
+  const LiveConfirmOrderCall({required this.functionCallId});
+}
 
+enum LiveCallPhase { connecting, listening, aiSpeaking, ended, error }
+
+class NoApiKeyConfiguredException implements Exception {
   @override
-  State<_LiveCallSheet> createState() => _LiveCallSheetState();
+  String toString() => 'Voice call is not configured yet.';
 }
 
-class _LiveCallSheetState extends State<_LiveCallSheet> with TickerProviderStateMixin {
-  final _service = LiveVoiceService();
-  LiveCallPhase _phase = LiveCallPhase.connecting;
+class LiveVoiceService {
+  static const String _model = 'gemini-3.1-flash-live-preview';
+  static const int _sampleRateOut = 24000;
+  static const int _sampleRateIn = 16000;
+  static const int _bytesPerSample = 2;
+
+  static const MethodChannel _audioModeChannel = MethodChannel('kusbilo/audio_mode');
+  bool _audioSessionConfigured = false;
+
+  WebSocketChannel? _channel;
+  StreamSubscription<Uint8List>? _micSub;
+  StreamSubscription? _wsSub;
+  final AudioRecorder _recorder = AudioRecorder();
+
   bool _isMuted = false;
-  String? _errorText;
-  String _captionLine = '';
-  String _userCaptionLine = '';
-  bool _ended = false;
-  bool _placingOrder = false;
-  final List<String> _addedLines = [];
+  bool get isMuted => _isMuted;
+  final _muteController = StreamController<bool>.broadcast();
+  Stream<bool> get muteStream => _muteController.stream;
 
-  // Subtle continuous motion behind the mic/speaker icon so the state
-  // doesn't look frozen — not meant to read as a "ringing phone", just
-  // enough life to show the assistant is actively listening/talking.
-  late final AnimationController _pulseController = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-  )..repeat(reverse: true);
+  final _phaseController = StreamController<LiveCallPhase>.broadcast();
+  Stream<LiveCallPhase> get phaseStream => _phaseController.stream;
 
-  // Drives the little equalizer bars while the AI is talking — each
-  // bar reads the same clock at a different phase offset so they
-  // don't move in lockstep, which is what makes it read as "sound"
-  // rather than an obviously mechanical loop.
-  late final AnimationController _eqController = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 700),
-  )..repeat();
+  bool get isActive => _channel != null;
 
-  @override
-  void initState() {
-    super.initState();
-    _service.phaseStream.listen((phase) {
-      if (mounted) {
-        setState(() {
-          _phase = phase;
-          // Once the AI actually starts answering, the buyer's own
-          // caption has served its purpose — drop it so the two
-          // captions don't visually collide.
-          if (phase == LiveCallPhase.aiSpeaking) _userCaptionLine = '';
-        });
+  bool Function(LiveOrderCall call)? onOrderCall;
+  void Function(LiveConfirmOrderCall call)? onConfirmOrder;
+  void Function(String text)? onModelText;
+  void Function(String text)? onUserText;
+  void Function(String error)? onError;
+
+  final Map<String, Completer<String>> _pendingConfirmations = {};
+
+  bool _pcmReady = false;
+  bool _setupComplete = false;
+  bool _manualDisconnect = false;
+  bool _isRefreshingSession = false;
+  int _reconnectAttempts = 0;
+  static const int _maxReconnectAttempts = 3;
+
+  List<Product>? _lastProducts;
+  AppStrings? _lastStrings;
+  bool _lastIsHindi = false;
+
+  static const Duration _connectTimeout = Duration(seconds: 15);
+  Timer? _connectTimeoutTimer;
+
+  static const Duration _sessionRefreshAt = Duration(minutes: 9, seconds: 30);
+  Timer? _sessionRefreshTimer;
+
+  int _playbackGeneration = 0;
+  bool _reinitInProgress = false;
+  final List<Uint8List> _pendingAudio = [];
+  Future<void> _feedChain = Future.value();
+  bool _aiIsSpeaking = false;
+
+  static const double _minCushionSeconds = 0.25;
+  static const double _maxCushionSeconds = 1.0;
+  double _cushionSeconds = _minCushionSeconds;
+  int get _cushionBytes => (_sampleRateOut * _bytesPerSample * _cushionSeconds).round();
+  bool _bufferingTurn = true;
+  final BytesBuilder _jitterBuffer = BytesBuilder(copy: false);
+  DateTime? _lastChunkArrival;
+  final List<int> _turnGapsMs = [];
+
+  DateTime? _turnPlaybackStart;
+  int _turnBytesFed = 0;
+  void _resetFeedPacing() {
+    _turnPlaybackStart = null;
+    _turnBytesFed = 0;
+  }
+
+  static const double _speechAmplitudeThreshold = 3000 / 32767;
+  double _peakAmplitude(Uint8List chunk) {
+    final samples = ByteData.sublistView(chunk);
+    var peak = 0;
+    for (var i = 0; i + 1 < chunk.length; i += 2) {
+      final sample = samples.getInt16(i, Endian.little).abs();
+      if (sample > peak) peak = sample;
+    }
+    return (peak / 32767).clamp(0.0, 1.0);
+  }
+
+  void toggleMute() {
+    _isMuted = !_isMuted;
+    _muteController.add(_isMuted);
+  }
+
+  Future<void> _setupAudioSession() async {
+    try {
+      if (Platform.isAndroid) {
+        await _audioModeChannel.invokeMethod('setAudioMode');
+      } else if (Platform.isIOS) {
+        await _audioModeChannel.invokeMethod('setupAudioSession');
       }
-    });
-    _service.muteStream.listen((muted) {
-      if (mounted) setState(() => _isMuted = muted);
-    });
-    _service.onModelText = (text) {
-      if (mounted) setState(() => _captionLine = text);
-    };
-    // Buyer's own words, as heard by the model — cleared the instant
-    // the AI starts replying so it doesn't linger on screen looking
-    // stale next to the AI's own caption.
-    _service.onUserText = (text) {
-      if (mounted) setState(() => _userCaptionLine = text);
-    };
-    _service.onOrderCall = _handleOrderCall;
-    _service.onConfirmOrder = _handleConfirmOrder;
-    _service.onError = (message) {
-      if (mounted) setState(() => _errorText = message);
-    };
-    _startSession();
-  }
-
-  Future<void> _startSession() async {
-    final catalog = context.read<CatalogProvider>();
-    final locale = context.read<LocaleProvider>();
-    final strings = locale.strings;
-
-    try {
-      await _service.start(
-        catalog.products,
-        strings,
-        isHindi: locale.language == AppLanguage.hindi,
-      );
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _phase = LiveCallPhase.error;
-        if (e is NoApiKeyConfiguredException) {
-          _errorText = strings.liveCallNoApiKeyError;
-        } else if (e.toString().contains('ermission')) {
-          _errorText = strings.liveCallMicPermissionError;
-        } else {
-          _errorText = strings.liveCallFailedError;
-        }
-      });
+      onError?.call('Could not configure call audio — echo cancellation may be weaker: $e');
     }
   }
 
-  bool _handleOrderCall(LiveOrderCall call) {
-    if (_ended || !mounted) return false;
-    final catalog = context.read<CatalogProvider>();
-    final product = catalog.productById(call.productId);
-    if (product == null) return false;
+  Future<void> start(
+    List<Product> products,
+    AppStrings strings, {
+    required bool isHindi,
+  }) async {
+    _phaseController.add(LiveCallPhase.connecting);
+    _manualDisconnect = false;
 
-    final cart = context.read<CartProvider>();
-    for (var i = 0; i < call.quantity; i++) {
-      cart.add(product.id);
+    if (!await _recorder.hasPermission()) {
+      _phaseController.add(LiveCallPhase.error);
+      onError?.call('Microphone permission denied.');
+      throw Exception('Microphone permission denied.');
     }
 
-    final lang = context.read<LocaleProvider>().language;
-    final strings = context.read<LocaleProvider>().strings;
-    setState(() {
-      _addedLines.add(strings.liveCallItemAdded(product.name(lang), call.quantity));
-    });
-    return true;
+    _lastProducts = products;
+    _lastStrings = strings;
+    _lastIsHindi = isHindi;
+
+    await _connect();
   }
 
-  /// Mirrors the old voice-order sheet's checkout flow: builds order
-  /// items from whatever's in the cart, auto-detects delivery location
-  /// via GPS, and places it through the same placeOrder Cloud Function
-  /// as regular checkout. Reports the outcome back to the model via
-  /// [LiveVoiceService.respondToConfirmOrder] so it can tell the buyer
-  /// what happened in its own words instead of the app going silent.
-  Future<void> _handleConfirmOrder(LiveConfirmOrderCall call) async {
-    if (_ended || !mounted) return;
-    final cart = context.read<CartProvider>();
-    final catalog = context.read<CatalogProvider>();
-    final strings = context.read<LocaleProvider>().strings;
+  Future<({String token, String instructions})?> _fetchTokenAndInstructions() async {
+    final products = _lastProducts;
+    final strings = _lastStrings;
+    if (products == null || strings == null) return null;
 
-    if (cart.isEmpty) {
-      // Used to just return here silently — the buyer would hear the AI
-      // say it's confirming while the screen showed nothing at all, with
-      // no way to tell what went wrong. Now it's a visible error state.
-      setState(() {
-        _phase = LiveCallPhase.error;
-        _errorText = strings.liveCallEmptyCartError;
-      });
-      _service.respondToConfirmOrder(call.functionCallId, 'empty');
-      return;
-    }
+    final catalogLines = products
+        .where((p) => p.isActive && p.stock > 0)
+        .map((p) =>
+            '${p.id} | ${p.nameHi} / ${p.nameEn} | ₹${p.priceValue}${p.unit} | tags: ${p.tags.join(', ')} | ${p.description}')
+        .join('\n');
 
-    setState(() => _placingOrder = true);
+    final appFaq = '''
+- ${strings.faqHowToOrderAnswer}
+- ${strings.faqPaymentAnswer}
+- ${strings.faqDeliveryTimeAnswer}
+- ${strings.faqTrackOrderAnswer}
+- ${strings.faqBecomeSellerAnswer}
+- ${strings.faqChangeLanguageAnswer}
+- ${strings.faqCancelOrderAnswer}
+- ${strings.faqAppNameAnswer}
+''';
 
-    DetectedLocation location;
+    late final HttpsCallableResult result;
     try {
-      location = await LocationService.detectCurrentLocation();
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _placingOrder = false;
-        _phase = LiveCallPhase.error;
-        _errorText = strings.liveCallLocationError;
-      });
-      _service.respondToConfirmOrder(call.functionCallId, 'location_error');
-      return;
+      result = await FirebaseFunctions.instance.httpsCallable('createGeminiEphemeralToken').call({});
+    } on FirebaseFunctionsException catch (e) {
+      _phaseController.add(LiveCallPhase.error);
+      if (e.code == 'failed-precondition') throw NoApiKeyConfiguredException();
+      onError?.call('Could not start call: ${e.message}');
+      rethrow;
     }
 
-    final items = cart.quantities.entries
-        .map((e) => (product: catalog.productById(e.key), qty: e.value))
-        .where((entry) => entry.product != null)
-        .map((entry) => OrderItem(
-              productId: entry.product!.id,
-              nameHi: entry.product!.nameHi,
-              nameEn: entry.product!.nameEn,
-              priceValue: entry.product!.priceValue,
-              unit: entry.product!.unit,
-              quantity: entry.qty,
-            ))
-        .toList();
-
-    if (!mounted) return;
-    final order = await context.read<OrderProvider>().placeOrder(
-          items: items,
-          deliveryLat: location.latitude,
-          deliveryLng: location.longitude,
-          deliveryAddressLabel: location.label,
-        );
-
-    if (!mounted) return;
-    setState(() => _placingOrder = false);
-
-    if (order == null) {
-      // Used to also just return silently here — same problem, worse
-      // stakes: the buyer thinks their order went through when it
-      // didn't. Now it's shown plainly, with a way to see why via
-      // orderProvider.errorMessage in logs/crash reporting.
-      setState(() {
-        _phase = LiveCallPhase.error;
-        _errorText = strings.liveCallOrderFailedError;
-      });
-      _service.respondToConfirmOrder(call.functionCallId, 'failed');
-      return;
+    final data = Map<String, dynamic>.from(result.data as Map);
+    final token = data['token'] as String?;
+    final adminInstructions = data['adminInstructions'] as String? ?? '';
+    if (token == null) {
+      _phaseController.add(LiveCallPhase.error);
+      throw NoApiKeyConfiguredException();
     }
 
-    _service.respondToConfirmOrder(call.functionCallId, 'success');
-    cart.clear();
-    _ended = true;
-    // Give the model a beat to actually speak the confirmation before
-    // we tear the call down and navigate away.
-    await Future.delayed(const Duration(seconds: 2));
-    await _service.stop();
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => OrderSuccessScreen(order: order)),
+    final instructions = _buildInstructions(
+      isHindi: _lastIsHindi,
+      catalog: catalogLines,
+      appFaq: appFaq,
+      adminInstructions: adminInstructions,
     );
+
+    return (token: token, instructions: instructions);
   }
 
-  Future<void> _endCall() async {
-    HapticFeedback.mediumImpact();
-    _ended = true;
-    await _service.stop();
-    if (mounted) Navigator.of(context).pop();
+  String _buildInstructions({
+    required bool isHindi,
+    required String catalog,
+    required String appFaq,
+    required String adminInstructions,
+  }) {
+    final lang = isHindi ? 'Hindi' : 'English';
+    final languageLine =
+        'RESPOND ONLY IN $lang. YOU MUST SPEAK UNMISTAKABLY IN $lang THE ENTIRE '
+        'CALL — every single sentence, no exceptions, even if the buyer speaks '
+        'a different language or the catalog text below is in English. '
+        'Never switch languages mid-call.';
+    final adminBlock = adminInstructions.isNotEmpty
+        ? '\nCurrent notes from the shop admin (offers, greetings, tone) — follow these:\n$adminInstructions\n'
+        : '';
+    return '''You are Kusbilo's voice ordering assistant.
+
+$languageLine
+
+You help the buyer pick items and place an order, entirely by voice.
+
+Speaking style: talk like a warm, friendly local shopkeeper on a phone call,
+not like a machine reading a menu. Use natural pacing, react genuinely to what
+the buyer says. Use casual filler occasionally ("haan", "theek hai", "chaliye").
+
+Available products (id | names | price | tags | description):
+${catalog.isEmpty ? 'No catalog was provided for this call.' : catalog}
+
+App FAQ, use this if the buyer asks a general question about the app:
+${appFaq.isEmpty ? 'No FAQ was provided for this call.' : appFaq}
+$adminBlock
+Rules:
+- Only offer products that appear in the catalog above. Never invent products or prices.
+- When the buyer clearly wants an item, call add_to_cart with its exact product id and quantity.
+- When the buyer says they're done, read back the full order (items, quantities) and
+  get a clear "yes" — THEN immediately call confirm_order. Do not say the order is
+  placed before calling confirm_order.
+- After confirm_order returns, only tell the buyer the order is confirmed if the
+  status indicates success. If it failed, say there was a problem and offer to retry.
+- Only call confirm_order once per order.
+- Keep responses short — this is a voice call, not a chat.
+- REMINDER: speak only in $lang, no matter what.
+''';
   }
 
-  void _toggleMute() {
-    HapticFeedback.selectionClick();
-    _service.toggleMute();
-  }
-
-  @override
-  void dispose() {
-    _ended = true;
-    _pulseController.dispose();
-    _eqController.dispose();
-    _service.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final strings = context.watch<LocaleProvider>().strings;
-
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _endCall();
-      },
-      child: Container(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: Container(
-          decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-          padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.inactive, borderRadius: BorderRadius.circular(2))),
-              const SizedBox(height: 20),
-              if (_addedLines.isNotEmpty) ...[
-                ..._addedLines.map((line) => Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.check_circle, color: AppColors.green, size: 16),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(line, style: AppTextStyles.body(fontSize: 13, fontWeight: FontWeight.w600)),
-                          ),
-                        ],
-                      ),
-                    )),
-                const SizedBox(height: 12),
-              ],
-              _buildStateBody(strings),
-              if (_userCaptionLine.isNotEmpty && _phase == LiveCallPhase.listening) ...[
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(Icons.hearing_rounded, size: 14, color: AppColors.green),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        _userCaptionLine,
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTextStyles.body(fontSize: 12, color: AppColors.charcoal, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-              if (_captionLine.isNotEmpty && _phase != LiveCallPhase.error) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _captionLine,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTextStyles.body(fontSize: 12, color: AppColors.muted),
-                ),
-              ],
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  if (_phase == LiveCallPhase.listening || _phase == LiveCallPhase.aiSpeaking) ...[
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _toggleMute,
-                        icon: Icon(_isMuted ? Icons.mic_off : Icons.mic, size: 18),
-                        label: Text(
-                          _isMuted ? strings.liveCallUnmuteButton : strings.liveCallMuteButton,
-                          style: AppTextStyles.body(fontSize: 13, fontWeight: FontWeight.w600),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                  ],
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _endCall,
-                      icon: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
-                      label: Text(strings.liveCallEndButton,
-                          style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.charcoal,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStateBody(dynamic strings) {
-    if (_placingOrder) {
-      return Column(
-        children: [
-          const SizedBox(width: 40, height: 40, child: CircularProgressIndicator(strokeWidth: 3, color: AppColors.green)),
-          const SizedBox(height: 16),
-          Text(strings.liveCallPlacingOrderLabel, style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w600)),
-        ],
-      );
+  Future<void> _connect() async {
+    if (!_audioSessionConfigured) {
+      await _setupAudioSession();
+      _audioSessionConfigured = true;
     }
 
-    switch (_phase) {
-      case LiveCallPhase.connecting:
-        return Column(
-          children: [
-            const SizedBox(width: 40, height: 40, child: CircularProgressIndicator(strokeWidth: 3, color: AppColors.green)),
-            const SizedBox(height: 16),
-            Text(strings.liveCallConnecting, style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w600)),
-          ],
-        );
-      case LiveCallPhase.listening:
-        return Column(
-          children: [
-            AnimatedBuilder(
-              animation: _pulseController,
-              builder: (context, child) {
-                final scale = 0.95 + (_pulseController.value * 0.08);
-                return Transform.scale(scale: scale, child: child);
-              },
-              child: Container(
-                width: 84,
-                height: 84,
-                decoration: const BoxDecoration(color: AppColors.green, shape: BoxShape.circle),
-                child: Icon(_isMuted ? Icons.mic_off_rounded : Icons.mic_rounded, color: Colors.white, size: 36),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(strings.liveCallInProgress,
-                textAlign: TextAlign.center, style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w600)),
-          ],
-        );
-      case LiveCallPhase.aiSpeaking:
-        return Column(
-          children: [
-            Container(
-              width: 84,
-              height: 84,
-              decoration: const BoxDecoration(color: AppColors.mustard, shape: BoxShape.circle),
-              child: Center(
-                child: AnimatedBuilder(
-                  animation: _eqController,
-                  builder: (context, _) {
-                    return Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: List.generate(4, (i) {
-                        // Each bar samples the same loop at a different
-                        // phase so they don't move in lockstep.
-                        final t = (_eqController.value + i * 0.22) % 1.0;
-                        final h = 8 + (1 - (2 * t - 1).abs()) * 20;
-                        return Container(
-                          width: 5,
-                          height: h,
-                          margin: const EdgeInsets.symmetric(horizontal: 2),
-                          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(3)),
-                        );
-                      }),
-                    );
-                  },
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(strings.liveCallAiSpeakingLabel,
-                textAlign: TextAlign.center, style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w600)),
-          ],
-        );
-      case LiveCallPhase.error:
-        return Column(
-          children: [
-            const Icon(Icons.error_outline, color: Color(0xFFC0453B), size: 44),
-            const SizedBox(height: 12),
-            Text(_errorText ?? strings.liveCallFailedError,
-                textAlign: TextAlign.center, style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w600)),
-          ],
-        );
-      case LiveCallPhase.ended:
-        if (_errorText != null) {
-          return Column(
-            children: [
-              const Icon(Icons.error_outline, color: Color(0xFFC0453B), size: 44),
-              const SizedBox(height: 12),
-              Text(_errorText!, textAlign: TextAlign.center, style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w600)),
-            ],
-          );
+    final fetched = await _fetchTokenAndInstructions();
+    if (fetched == null) return;
+    final token = fetched.token;
+    final instructions = fetched.instructions;
+
+    _setupComplete = false;
+    _connectTimeoutTimer?.cancel();
+    _connectTimeoutTimer = Timer(_connectTimeout, () {
+      if (_setupComplete || _manualDisconnect) return;
+      onError?.call('Connection timed out. Please try again.');
+      _phaseController.add(LiveCallPhase.error);
+      _channel?.sink.close();
+    });
+
+    if (!_pcmReady) {
+      await FlutterPcmSound.setup(sampleRate: _sampleRateOut, channelCount: 1);
+      FlutterPcmSound.setFeedCallback((_) {});
+      _pcmReady = true;
+    }
+
+    final uri = Uri.parse(
+      'wss://generativelanguage.googleapis.com/ws/'
+      'google.ai.generativelanguage.v1beta.GenerativeService.'
+      'BidiGenerateContentConstrained?access_token=$token',
+    );
+
+    const maxAttempts = 2;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        _channel = WebSocketChannel.connect(uri);
+        await _channel!.ready;
+        break;
+      } catch (e) {
+        if (attempt == maxAttempts) {
+          _connectTimeoutTimer?.cancel();
+          onError?.call('Could not connect: $e');
+          _phaseController.add(LiveCallPhase.error);
+          return;
         }
-        return const SizedBox(height: 84);
+        await Future.delayed(const Duration(milliseconds: 800));
+      }
     }
+
+    _send({
+      'setup': {
+        'model': 'models/$_model',
+        'generationConfig': {
+          'responseModalities': ['AUDIO'],
+          'speechConfig': {
+            'voiceConfig': {
+              'prebuiltVoiceConfig': {'voiceName': 'Sulafat'},
+            },
+          },
+        },
+        'systemInstruction': {
+          'parts': [
+            {'text': instructions},
+          ],
+        },
+        'realtimeInputConfig': {
+          'automaticActivityDetection': {
+            'disabled': false,
+            'startOfSpeechSensitivity': 'START_SENSITIVITY_LOW',
+            'endOfSpeechSensitivity': 'END_SENSITIVITY_LOW',
+            'prefixPaddingMs': 200,
+            'silenceDurationMs': 400,
+          },
+          'activityHandling': 'START_OF_ACTIVITY_INTERRUPTS',
+        },
+        'tools': [
+          {
+            'functionDeclarations': [
+              {
+                'name': 'add_to_cart',
+                'description': "Add a product to the buyer's cart.",
+                'parameters': {
+                  'type': 'OBJECT',
+                  'properties': {
+                    'product_id': {'type': 'STRING'},
+                    'quantity': {'type': 'INTEGER'},
+                  },
+                  'required': ['product_id', 'quantity'],
+                },
+              },
+              {
+                'name': 'confirm_order',
+                'description':
+                    'Call once the buyer agrees to place the order. Check the '
+                    'returned status before telling the buyer it is confirmed.',
+                'parameters': {'type': 'OBJECT', 'properties': {}},
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    _wsSub = _channel!.stream.listen(
+      _handleServerMessage,
+      onError: (e) {
+        onError?.call('Connection error: $e');
+        _phaseController.add(LiveCallPhase.error);
+      },
+      onDone: () => _handleSocketClosed(),
+    );
+  }
+
+  void _handleSocketClosed() {
+    final code = _channel?.closeCode;
+    final reason = _channel?.closeReason;
+    print('WebSocket closed: code=$code, reason=$reason');
+
+    if (_isRefreshingSession) {
+      _isRefreshingSession = false;
+      _teardownMicOnly();
+      _channel = null;
+      if (!_manualDisconnect) _connect();
+      return;
+    }
+
+    final unexpected = code != null && code != 1000;
+
+    if (!_manualDisconnect && unexpected && _reconnectAttempts < _maxReconnectAttempts) {
+      _reconnectAttempts++;
+      onError?.call('Call dropped — reconnecting ($_reconnectAttempts/$_maxReconnectAttempts)...');
+      _phaseController.add(LiveCallPhase.connecting);
+      _teardownMicOnly();
+      _channel = null;
+      final backoff = Duration(milliseconds: 800 * _reconnectAttempts);
+      Future.delayed(backoff, () {
+        if (!_manualDisconnect) _connect();
+      });
+      return;
+    }
+
+    if (!_ended) _phaseController.add(LiveCallPhase.ended);
+  }
+
+  void _teardownMicOnly() {
+    _micSub?.cancel();
+    _micSub = null;
+    _recorder.stop().catchError((_) => null);
+  }
+
+  void _scheduleSessionRefresh() {
+    _sessionRefreshTimer?.cancel();
+    _sessionRefreshTimer = Timer(_sessionRefreshAt, () {
+      if (_manualDisconnect) return;
+      _isRefreshingSession = true;
+      _channel?.sink.close(1000, 'proactive session refresh');
+    });
+  }
+
+  void _send(Map<String, dynamic> message) {
+    _channel?.sink.add(jsonEncode(message));
+  }
+
+  Future<void> _startMicStreaming() async {
+    final stream = await _recorder.startStream(const RecordConfig(
+      encoder: AudioEncoder.pcm16bits,
+      sampleRate: _sampleRateIn,
+      numChannels: 1,
+      echoCancel: true,
+      noiseSuppress: true,
+      autoGain: true,
+    ));
+    _micSub = stream.listen((chunk) {
+      if (_channel == null || _isMuted) return;
+
+      final amplitude = _peakAmplitude(chunk);
+      if (_aiIsSpeaking && amplitude > _speechAmplitudeThreshold) {
+        _handleBargeIn();
+      }
+
+      _send({
+        'realtimeInput': {
+          'audio': {'mimeType': 'audio/pcm;rate=$_sampleRateIn', 'data': base64Encode(chunk)},
+        },
+      });
+    });
+  }
+
+  void _handleBargeIn() {
+    if (!_aiIsSpeaking) return;
+    HapticFeedback.selectionClick();
+    _aiIsSpeaking = false;
+    _jitterBuffer.clear();
+    _bufferingTurn = true;
+    _turnGapsMs.clear();
+    _lastChunkArrival = null;
+    _reinitPlayback();
+  }
+
+  Future<void> _reinitPlayback() async {
+    if (_reinitInProgress) return;
+    _reinitInProgress = true;
+    _playbackGeneration++;
+    _pendingAudio.clear();
+    _resetFeedPacing();
+    try {
+      await FlutterPcmSound.release();
+      await FlutterPcmSound.setup(sampleRate: _sampleRateOut, channelCount: 1);
+    } catch (e) {
+      onError?.call('Could not reset audio playback: $e');
+    } finally {
+      _reinitInProgress = false;
+    }
+    _feedChain = Future.value();
+    for (final bytes in _pendingAudio) {
+      _queueFeed(bytes);
+    }
+    _pendingAudio.clear();
+  }
+
+  void _queueFeed(Uint8List bytes) {
+    final generation = _playbackGeneration;
+    _feedChain = _feedChain.then((_) async {
+      if (generation != _playbackGeneration) return;
+      _turnPlaybackStart ??= DateTime.now();
+      _turnBytesFed += bytes.length;
+      final audioSecondsFed = _turnBytesFed / (_sampleRateOut * _bytesPerSample);
+      final wallSecondsElapsed = DateTime.now().difference(_turnPlaybackStart!).inMilliseconds / 1000;
+      final lead = audioSecondsFed - wallSecondsElapsed;
+      final maxLead = _cushionSeconds + 1.0;
+      if (lead > maxLead) {
+        await Future.delayed(Duration(milliseconds: ((lead - maxLead) * 1000).round()));
+      }
+      if (generation != _playbackGeneration) return;
+      return FlutterPcmSound.feed(PcmArrayInt16(bytes: bytes.buffer.asByteData()))
+          .catchError((e) => onError?.call('Audio feed failed: $e'));
+    });
+  }
+
+  void _adaptCushion() {
+    if (_turnGapsMs.isEmpty) return;
+    final avgGap = _turnGapsMs.reduce((a, b) => a + b) / _turnGapsMs.length;
+    final maxGap = _turnGapsMs.reduce((a, b) => a > b ? a : b);
+    if (avgGap > 120 || maxGap > 400) {
+      _cushionSeconds = (_cushionSeconds + 0.15).clamp(_minCushionSeconds, _maxCushionSeconds);
+    } else if (avgGap < 50 && maxGap < 150) {
+      _cushionSeconds = (_cushionSeconds - 0.05).clamp(_minCushionSeconds, _maxCushionSeconds);
+    }
+    _turnGapsMs.clear();
+    _lastChunkArrival = null;
+  }
+
+  bool _ended = false;
+
+  void _handleServerMessage(dynamic raw) {
+    Map<String, dynamic> msg;
+    try {
+      final text = raw is String ? raw : utf8.decode(raw as List<int>);
+      msg = jsonDecode(text) as Map<String, dynamic>;
+    } catch (_) {
+      return;
+    }
+
+    if (msg.containsKey('setupComplete')) {
+      _setupComplete = true;
+      _connectTimeoutTimer?.cancel();
+      _reconnectAttempts = 0;
+      _scheduleSessionRefresh();
+      _startMicStreaming().catchError((e) {
+        onError?.call('Microphone streaming failed: $e');
+        _phaseController.add(LiveCallPhase.error);
+      });
+      _phaseController.add(LiveCallPhase.listening);
+      _send({
+        'clientContent': {
+          'turns': [
+            {
+              'role': 'user',
+              'parts': [
+                {'text': "Greet the buyer briefly and ask what they'd like to order today."}
+              ],
+            }
+          ],
+          'turnComplete': true,
+        },
+      });
+      return;
+    }
+
+    final serverContent = msg['serverContent'] as Map<String, dynamic>?;
+    if (serverContent != null) {
+      if (serverContent['interrupted'] == true) _handleBargeIn();
+
+      final inputTranscription = serverContent['inputTranscription'] as Map<String, dynamic>?;
+      if (inputTranscription?['text'] != null) onUserText?.call(inputTranscription!['text'] as String);
+
+      final outputTranscription = serverContent['outputTranscription'] as Map<String, dynamic>?;
+      if (outputTranscription?['text'] != null) onModelText?.call(outputTranscription!['text'] as String);
+
+      final modelTurn = serverContent['modelTurn'] as Map<String, dynamic>?;
+      final parts = modelTurn?['parts'] as List<dynamic>? ?? [];
+      for (final part in parts) {
+        final inlineData = (part as Map<String, dynamic>)['inlineData'] as Map<String, dynamic>?;
+        if (inlineData?['data'] == null) continue;
+        final bytes = base64Decode(inlineData!['data'] as String);
+
+        final now = DateTime.now();
+        if (_lastChunkArrival != null) _turnGapsMs.add(now.difference(_lastChunkArrival!).inMilliseconds);
+        _lastChunkArrival = now;
+
+        if (_reinitInProgress) {
+          _pendingAudio.add(bytes);
+        } else if (_bufferingTurn) {
+          _jitterBuffer.add(bytes);
+          if (_jitterBuffer.length >= _cushionBytes) {
+            final cushion = _jitterBuffer.takeBytes();
+            _resetFeedPacing();
+            _queueFeed(cushion);
+            _bufferingTurn = false;
+          }
+        } else {
+          _queueFeed(bytes);
+        }
+        _aiIsSpeaking = true;
+        _phaseController.add(LiveCallPhase.aiSpeaking);
+      }
+
+      if (serverContent['turnComplete'] == true) {
+        if (_jitterBuffer.length > 0) _queueFeed(_jitterBuffer.takeBytes());
+        _bufferingTurn = true;
+        _aiIsSpeaking = false;
+        _adaptCushion();
+        _phaseController.add(LiveCallPhase.listening);
+      }
+      return;
+    }
+
+    final toolCall = msg['toolCall'] as Map<String, dynamic>?;
+    if (toolCall != null) _handleToolCall(toolCall);
+  }
+
+  void _handleToolCall(Map<String, dynamic> toolCall) {
+    final calls = toolCall['functionCalls'] as List<dynamic>? ?? [];
+    for (final call in calls) {
+      final c = call as Map<String, dynamic>;
+      final id = c['id'] as String;
+      final name = c['name'] as String;
+      final args = Map<String, dynamic>.from(c['args'] as Map? ?? {});
+
+      if (name == 'add_to_cart') {
+        final productId = args['product_id']?.toString() ?? '';
+        final quantity = int.tryParse(args['quantity']?.toString() ?? '1') ?? 1;
+        final added = onOrderCall?.call(LiveOrderCall(functionCallId: id, productId: productId, quantity: quantity)) ?? false;
+        _sendToolResponse(id, name, {'status': added ? 'added' : 'not_found'});
+      } else if (name == 'confirm_order') {
+        final completer = Completer<String>();
+        _pendingConfirmations[id] = completer;
+        onConfirmOrder?.call(LiveConfirmOrderCall(functionCallId: id));
+        completer.future
+            .timeout(const Duration(seconds: 25), onTimeout: () {
+          _pendingConfirmations.remove(id);
+          return 'failed';
+        })
+            .then((status) => _sendToolResponse(id, name, {'status': status}));
+      }
+    }
+  }
+
+  void _sendToolResponse(String id, String name, Map<String, dynamic> response) {
+    _send({
+      'toolResponse': {
+        'functionResponses': [
+          {'id': id, 'name': name, 'response': response},
+        ],
+      },
+    });
+  }
+
+  void respondToConfirmOrder(String functionCallId, String status) {
+    _pendingConfirmations.remove(functionCallId)?.complete(status);
+  }
+
+  Future<void> stop() async {
+    _ended = true;
+    _manualDisconnect = true;
+    _connectTimeoutTimer?.cancel();
+    _sessionRefreshTimer?.cancel();
+    for (final completer in _pendingConfirmations.values) {
+      if (!completer.isCompleted) completer.complete('failed');
+    }
+    _pendingConfirmations.clear();
+    _teardownMicOnly();
+    await _wsSub?.cancel();
+    _wsSub = null;
+    await _channel?.sink.close();
+    _channel = null;
+    if (_pcmReady) {
+      _playbackGeneration++;
+      await FlutterPcmSound.release();
+      _pcmReady = false;
+    }
+    if (!_phaseController.isClosed) _phaseController.add(LiveCallPhase.ended);
+  }
+
+  void dispose() {
+    stop();
+    _phaseController.close();
+    _muteController.close();
+    _recorder.dispose();
   }
 }
