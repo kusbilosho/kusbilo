@@ -70,10 +70,6 @@ class LiveVoiceService {
   int _reconnectAttempts = 0;
   static const int _maxReconnectAttempts = 3;
 
-  // Products/strings/language are remembered so a reconnect or the
-  // 9:30-min session refresh can rebuild the exact same call — including
-  // fetching a BRAND NEW token each time, since the Cloud Function mints
-  // single-use tokens (uses: 1).
   List<Product>? _lastProducts;
   AppStrings? _lastStrings;
   bool _lastIsHindi = false;
@@ -143,9 +139,6 @@ class LiveVoiceService {
     await _connect();
   }
 
-  /// Fetches ONE fresh single-use token + the admin's latest instructions,
-  /// and builds the full system prompt. Called on first connect, every
-  /// auto-reconnect, and every 9:30-min session refresh — never reused.
   Future<({String token, String instructions})?> _fetchTokenAndInstructions() async {
     final products = _lastProducts;
     final strings = _lastStrings;
@@ -202,11 +195,18 @@ class LiveVoiceService {
     required String appFaq,
     required String adminInstructions,
   }) {
-    final languageLine = isHindi ? 'Speak Hindi throughout the call.' : 'Speak English throughout the call.';
+    final lang = isHindi ? 'Hindi' : 'English';
+    final languageLine =
+        'RESPOND ONLY IN $lang. YOU MUST SPEAK UNMISTAKABLY IN $lang THE ENTIRE '
+        'CALL — every single sentence, no exceptions, even if the buyer speaks '
+        'a different language or the catalog text below is in English. '
+        'Never switch languages mid-call.';
     final adminBlock = adminInstructions.isNotEmpty
         ? '\nCurrent notes from the shop admin (offers, greetings, tone) — follow these:\n$adminInstructions\n'
         : '';
-    return '''You are Kusbilo's voice ordering assistant. $languageLine
+    return '''You are Kusbilo's voice ordering assistant.
+
+$languageLine
 
 You help the buyer pick items and place an order, entirely by voice.
 
@@ -230,6 +230,7 @@ Rules:
   status indicates success. If it failed, say there was a problem and offer to retry.
 - Only call confirm_order once per order.
 - Keep responses short — this is a voice call, not a chat.
+- REMINDER: speak only in $lang, no matter what.
 ''';
   }
 
@@ -284,7 +285,7 @@ Rules:
           'responseModalities': ['AUDIO'],
           'speechConfig': {
             'voiceConfig': {
-              'prebuiltVoiceConfig': {'voiceName': 'Leda'},
+              'prebuiltVoiceConfig': {'voiceName': 'Sulafat'},
             },
           },
         },
