@@ -19,7 +19,13 @@ class MainActivity : FlutterActivity() {
                 // mic apni hi speaker ki awaaz sun leta hai aur app galti se
                 // samajh leta hai buyer bol raha hai, AI ko beech me kaat deta hai.
                 audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-                audioManager.isSpeakerphoneOn = true
+                // Asli call jaisa: default earpiece (speaker OFF). Speakerphone
+                // par mic-se-speaker ka echo path lamba ho jaata hai, jisse
+                // built-in AEC ko cancel karna zyada mushkil hota hai — isiliye
+                // pehle yahan speaker forced-on tha to hi thoda "khar-khar"/echo
+                // sunayi deta tha. Earpiece default rakhne se AEC bahut behtar
+                // kaam karta hai, bilkul real phone call jaisa.
+                audioManager.isSpeakerphoneOn = false
                 result.success(null)
             } else {
                 result.notImplemented()
