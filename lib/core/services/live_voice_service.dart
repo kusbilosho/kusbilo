@@ -70,8 +70,13 @@ class LiveVoiceService {
   int _reconnectAttempts = 0;
   static const int _maxReconnectAttempts = 3;
 
-  String? _lastToken;
-  String? _lastInstructions;
+  // Products/strings/language are remembered so a reconnect or the
+  // 9:30-min session refresh can rebuild the exact same call — including
+  // fetching a BRAND NEW token each time, since the Cloud Function mints
+  // single-use tokens (uses: 1).
+  List<Product>? _lastProducts;
+  AppStrings? _lastStrings;
+  bool _lastIsHindi = false;
 
   static const Duration _connectTimeout = Duration(seconds: 15);
   Timer? _connectTimeoutTimer;
@@ -125,6 +130,27 @@ class LiveVoiceService {
     _phaseController.add(LiveCallPhase.connecting);
     _manualDisconnect = false;
 
+    if (!await _recorder.hasPermission()) {
+      _phaseController.add(LiveCallPhase.error);
+      onError?.call('Microphone permission denied.');
+      throw Exception('Microphone permission denied.');
+    }
+
+    _lastProducts = products;
+    _lastStrings = strings;
+    _lastIsHindi = isHindi;
+
+    await _connect();
+  }
+
+  /// Fetches ONE fresh single-use token + the admin's latest instructions,
+  /// and builds the full system prompt. Called on first connect, every
+  /// auto-reconnect, and every 9:30-min session refresh — never reused.
+  Future<({String token, String instructions})?> _fetchTokenAndInstructions() async {
+    final products = _lastProducts;
+    final strings = _lastStrings;
+    if (products == null || strings == null) return null;
+
     final catalogLines = products
         .where((p) => p.isActive && p.stock > 0)
         .map((p) =>
@@ -160,21 +186,14 @@ class LiveVoiceService {
       throw NoApiKeyConfiguredException();
     }
 
-    if (!await _recorder.hasPermission()) {
-      _phaseController.add(LiveCallPhase.error);
-      onError?.call('Microphone permission denied.');
-      throw Exception('Microphone permission denied.');
-    }
-
-    _lastToken = token;
-    _lastInstructions = _buildInstructions(
-      isHindi: isHindi,
+    final instructions = _buildInstructions(
+      isHindi: _lastIsHindi,
       catalog: catalogLines,
       appFaq: appFaq,
       adminInstructions: adminInstructions,
     );
 
-    await _connect();
+    return (token: token, instructions: instructions);
   }
 
   String _buildInstructions({
@@ -215,9 +234,10 @@ Rules:
   }
 
   Future<void> _connect() async {
-    final token = _lastToken;
-    final instructions = _lastInstructions;
-    if (token == null || instructions == null) return;
+    final fetched = await _fetchTokenAndInstructions();
+    if (fetched == null) return;
+    final token = fetched.token;
+    final instructions = fetched.instructions;
 
     _setupComplete = false;
     _connectTimeoutTimer?.cancel();
@@ -273,7 +293,6 @@ Rules:
             {'text': instructions},
           ],
         },
-        'thinkingConfig': {'thinkingBudget': 0},
         'realtimeInputConfig': {
           'automaticActivityDetection': {
             'disabled': false,
@@ -323,10 +342,9 @@ Rules:
   }
 
   void _handleSocketClosed() {
-  final code = _channel?.closeCode;
-  final reason = _channel?.closeReason;
-  print('WebSocket closed: code=$code, reason=$reason');
-  // baaki code same
+    final code = _channel?.closeCode;
+    final reason = _channel?.closeReason;
+    print('WebSocket closed: code=$code, reason=$reason');
 
     if (_isRefreshingSession) {
       _isRefreshingSession = false;
