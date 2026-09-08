@@ -321,7 +321,7 @@ Rules:
             'startOfSpeechSensitivity': 'START_SENSITIVITY_LOW',
             'endOfSpeechSensitivity': 'END_SENSITIVITY_LOW',
             'prefixPaddingMs': 200,
-            'silenceDurationMs': 400,
+            'silenceDurationMs': 500,
           },
           'activityHandling': 'START_OF_ACTIVITY_INTERRUPTS',
         },
