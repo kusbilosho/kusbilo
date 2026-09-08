@@ -54,6 +54,7 @@ dependencies:
   # (config/geminiLiveApi.apiKey) — buyers never see or enter a key.
   web_socket_channel: ^3.0.3
   record: ^6.0.0
+  flutter_nnnoiseless: ^1.4.0
   flutter_pcm_sound: ^3.1.0
 
   # Location auto-detect — geolocator reads GPS (free, OS-level),
