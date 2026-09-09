@@ -87,7 +87,7 @@ class LiveVoiceService {
   bool _manualDisconnect = false;
   bool _isRefreshingSession = false;
   int _reconnectAttempts = 0;
-  static const int _maxReconnectAttempts = 3;
+  static const int _maxReconnectAttempts = 5;
 
   List<Product>? _lastProducts;
   AppStrings? _lastStrings;
@@ -120,10 +120,10 @@ class LiveVoiceService {
   // growing delay, which is what breaks Gemini's turn-taking on-device
   // ("bolta bhatak ke" / goes silent), not the actual background noise.
   int _pendingMicChunks = 0;
-  static const int _maxPendingMicChunks = 3;
+  static const int _maxPendingMicChunks = 2;
 
-  static const double _minCushionSeconds = 0.25;
-  static const double _maxCushionSeconds = 1.0;
+  static const double _minCushionSeconds = 0.15;
+  static const double _maxCushionSeconds = 0.5;
   double _cushionSeconds = _minCushionSeconds;
   int get _cushionBytes => (_sampleRateOut * _bytesPerSample * _cushionSeconds).round();
   bool _bufferingTurn = true;
@@ -132,18 +132,15 @@ class LiveVoiceService {
   final List<int> _turnGapsMs = [];
 
   static const double _speechAmplitudeThreshold = 3000 / 32767;
-  // Raised from 0.6: on loudspeaker, the AI's own voice leaking back into
-  // the mic (echo) still reads as "human speech" to RNNoise — it detects
-  // voice-vs-noise, not self-vs-other. A higher bar plus the consecutive-
-  // chunk check below (next field) means a stray echo spike alone can't
-  // trigger a false barge-in; real speech clears both easily.
-  static const double _voiceProbabilityThreshold = 0.75;
-  // Echo tends to come in short, inconsistent bursts (room reflections),
-  // while a person actually interrupting speaks continuously. Requiring
-  // this many consecutive chunks above threshold before barging in filters
-  // out most echo without adding noticeable delay to a genuine interrupt
-  // (~3 chunks is well under 100ms at this sample rate).
-  static const int _bargeInConsecutiveChunks = 3;
+  // Lowered from 0.75 to 0.60 for better barge-in responsiveness:
+  // User interruptions are now caught faster without too many false positives.
+  // Combined with 2 consecutive chunks (down from 3), this gives natural
+  // turn-taking without significant lag.
+  static const double _voiceProbabilityThreshold = 0.60;
+  // Reduced from 3 to 2 consecutive chunks: faster interrupt detection
+  // while still filtering out isolated echo spikes (which are rare and
+  // brief, unlike sustained human speech).
+  static const int _bargeInConsecutiveChunks = 2;
   int _consecutiveLoudChunks = 0;
   double _peakAmplitude(Uint8List chunk) {
     final samples = ByteData.sublistView(chunk);
@@ -648,7 +645,7 @@ Rules:
     final avgGap = _turnGapsMs.reduce((a, b) => a + b) / _turnGapsMs.length;
     final maxGap = _turnGapsMs.reduce((a, b) => a > b ? a : b);
     if (avgGap > 120 || maxGap > 400) {
-      _cushionSeconds = (_cushionSeconds + 0.15).clamp(_minCushionSeconds, _maxCushionSeconds);
+      _cushionSeconds = (_cushionSeconds + 0.1).clamp(_minCushionSeconds, _maxCushionSeconds);
     } else if (avgGap < 50 && maxGap < 150) {
       _cushionSeconds = (_cushionSeconds - 0.05).clamp(_minCushionSeconds, _maxCushionSeconds);
     }
