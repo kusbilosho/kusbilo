@@ -132,7 +132,19 @@ class LiveVoiceService {
   final List<int> _turnGapsMs = [];
 
   static const double _speechAmplitudeThreshold = 3000 / 32767;
-  static const double _voiceProbabilityThreshold = 0.6;
+  // Raised from 0.6: on loudspeaker, the AI's own voice leaking back into
+  // the mic (echo) still reads as "human speech" to RNNoise — it detects
+  // voice-vs-noise, not self-vs-other. A higher bar plus the consecutive-
+  // chunk check below (next field) means a stray echo spike alone can't
+  // trigger a false barge-in; real speech clears both easily.
+  static const double _voiceProbabilityThreshold = 0.75;
+  // Echo tends to come in short, inconsistent bursts (room reflections),
+  // while a person actually interrupting speaks continuously. Requiring
+  // this many consecutive chunks above threshold before barging in filters
+  // out most echo without adding noticeable delay to a genuine interrupt
+  // (~3 chunks is well under 100ms at this sample rate).
+  static const int _bargeInConsecutiveChunks = 3;
+  int _consecutiveLoudChunks = 0;
   double _peakAmplitude(Uint8List chunk) {
     final samples = ByteData.sublistView(chunk);
     var peak = 0;
@@ -476,6 +488,7 @@ Rules:
     _denoiser = null;
     _micChain = Future.value();
     _pendingMicChunks = 0;
+    _consecutiveLoudChunks = 0;
   }
 
   void _scheduleSessionRefresh() {
@@ -557,9 +570,18 @@ Rules:
 
         // Real speech probability instead of a raw amplitude peak — a
         // loud non-voice noise (door slam, horn) no longer triggers a
-        // false barge-in.
+        // false barge-in. On top of that, require several consecutive
+        // loud chunks in a row — a single spike (typically the AI's own
+        // echo bouncing back on loudspeaker) resets the streak instead of
+        // firing immediately, so only sustained real speech interrupts.
         if (_aiIsSpeaking && voiceProbability > _voiceProbabilityThreshold) {
-          _handleBargeIn();
+          _consecutiveLoudChunks++;
+          if (_consecutiveLoudChunks >= _bargeInConsecutiveChunks) {
+            _consecutiveLoudChunks = 0;
+            _handleBargeIn();
+          }
+        } else {
+          _consecutiveLoudChunks = 0;
         }
 
         _send({
@@ -575,6 +597,7 @@ Rules:
     if (!_aiIsSpeaking) return;
     HapticFeedback.selectionClick();
     _aiIsSpeaking = false;
+    _consecutiveLoudChunks = 0;
     _jitterBuffer.clear();
     _bufferingTurn = true;
     _turnGapsMs.clear();
