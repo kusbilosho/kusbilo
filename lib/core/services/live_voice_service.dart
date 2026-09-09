@@ -6,7 +6,6 @@ import 'dart:typed_data';
 import 'package:audio_session/audio_session.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_nnnoiseless/flutter_nnnoiseless.dart';
 import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 import 'package:record/record.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -87,7 +86,7 @@ class LiveVoiceService {
   bool _manualDisconnect = false;
   bool _isRefreshingSession = false;
   int _reconnectAttempts = 0;
-  static const int _maxReconnectAttempts = 5;
+  static const int _maxReconnectAttempts = 3;
 
   List<Product>? _lastProducts;
   AppStrings? _lastStrings;
@@ -105,52 +104,14 @@ class LiveVoiceService {
   Future<void> _feedChain = Future.value();
   bool _aiIsSpeaking = false;
 
-  // --- Mic-side noise suppression (RNNoise, via flutter_nnnoiseless) ---
-  // OS-level echoCancel/noiseSuppress (RecordConfig below) only catches
-  // steady background hiss. A neural denoiser recognizes "this is a human
-  // voice" vs. everything else, so it also kills non-steady noise — a
-  // horn, a dog bark, someone else talking nearby — that the OS-level
-  // toggle lets straight through. Every mic chunk is denoised BEFORE it's
-  // sent to Gemini, so the AI only ever hears clean speech.
-  NoiselessSession? _denoiser;
-  Future<void> _micChain = Future.value();
-  // How many mic chunks are currently queued waiting on the denoiser (sent
-  // but not yet processed). If this grows, the denoiser is running slower
-  // than real time on this device — every chunk after it inherits the same
-  // growing delay, which is what breaks Gemini's turn-taking on-device
-  // ("bolta bhatak ke" / goes silent), not the actual background noise.
-  int _pendingMicChunks = 0;
-  static const int _maxPendingMicChunks = 2;
-
-  static const double _minCushionSeconds = 0.15;
-  static const double _maxCushionSeconds = 0.5;
+  static const double _minCushionSeconds = 0.25;
+  static const double _maxCushionSeconds = 1.0;
   double _cushionSeconds = _minCushionSeconds;
   int get _cushionBytes => (_sampleRateOut * _bytesPerSample * _cushionSeconds).round();
   bool _bufferingTurn = true;
   final BytesBuilder _jitterBuffer = BytesBuilder(copy: false);
   DateTime? _lastChunkArrival;
   final List<int> _turnGapsMs = [];
-
-  static const double _speechAmplitudeThreshold = 3000 / 32767;
-  // Lowered from 0.75 to 0.60 for better barge-in responsiveness:
-  // User interruptions are now caught faster without too many false positives.
-  // Combined with 2 consecutive chunks (down from 3), this gives natural
-  // turn-taking without significant lag.
-  static const double _voiceProbabilityThreshold = 0.60;
-  // Reduced from 3 to 2 consecutive chunks: faster interrupt detection
-  // while still filtering out isolated echo spikes (which are rare and
-  // brief, unlike sustained human speech).
-  static const int _bargeInConsecutiveChunks = 2;
-  int _consecutiveLoudChunks = 0;
-  double _peakAmplitude(Uint8List chunk) {
-    final samples = ByteData.sublistView(chunk);
-    var peak = 0;
-    for (var i = 0; i + 1 < chunk.length; i += 2) {
-      final sample = samples.getInt16(i, Endian.little).abs();
-      if (sample > peak) peak = sample;
-    }
-    return (peak / 32767).clamp(0.0, 1.0);
-  }
 
   void toggleMute() {
     _isMuted = !_isMuted;
@@ -481,11 +442,6 @@ Rules:
     _micSub?.cancel();
     _micSub = null;
     _recorder.stop().catchError((_) => null);
-    _denoiser?.dispose();
-    _denoiser = null;
-    _micChain = Future.value();
-    _pendingMicChunks = 0;
-    _consecutiveLoudChunks = 0;
   }
 
   void _scheduleSessionRefresh() {
@@ -502,7 +458,6 @@ Rules:
   }
 
   Future<void> _startMicStreaming() async {
-    _denoiser = await NoiselessSession.create(sampleRate: _sampleRateIn);
     final stream = await _recorder.startStream(const RecordConfig(
       encoder: AudioEncoder.pcm16bits,
       sampleRate: _sampleRateIn,
@@ -513,9 +468,8 @@ Rules:
       androidConfig: AndroidRecordConfig(
         // The mic source real VoIP apps use — engages the phone's own
         // call-grade AEC/NS/AGC in the audio HAL itself, underneath our
-        // app-level effects above and the RNNoise pass below, instead of
-        // capturing from the plain mic source and relying on the app-level
-        // effects alone.
+        // app-level effects above, instead of capturing from the plain
+        // mic source and relying on the app-level effects alone.
         audioSource: AndroidAudioSource.voiceCommunication,
         audioManagerMode: AudioManagerMode.modeInCommunication,
         // Route to a connected Bluetooth headset's mic (SCO) if there is
@@ -524,68 +478,18 @@ Rules:
         speakerphone: false,
       ),
     ));
+    // Straight passthrough to Gemini — no local noise/echo/voice-activity
+    // guessing here. Gemini's own server-side VAD (configured above with
+    // startOfSpeechSensitivity/endOfSpeechSensitivity) decides when the
+    // buyer has actually started talking and sends serverContent
+    // ['interrupted'] == true, handled in _handleServerMessage — that's
+    // the only thing that triggers a barge-in.
     _micSub = stream.listen((chunk) {
       if (_channel == null || _isMuted) return;
-
-      // If chunks are already piling up waiting on the denoiser, this
-      // device can't keep up with it in real time. Skip denoising THIS
-      // chunk and send it raw — that keeps the chain's per-chunk work
-      // near-zero so it drains the backlog instead of growing it further.
-      // Sending stale-but-clean audio late is worse than sending fresh-but-
-      // noisy audio on time: a growing delay is what confuses Gemini's
-      // turn-taking (that's the actual cause of "bolta bhatak ke" / goes
-      // silent), not a few unfiltered chunks.
-      final skipDenoise = _pendingMicChunks >= _maxPendingMicChunks;
-      _pendingMicChunks++;
-
-      // Chain each chunk's denoise+send so chunks always leave in the
-      // order they arrived, even though denoising is async.
-      _micChain = _micChain.then((_) async {
-        Uint8List clean;
-        double voiceProbability;
-        final denoiser = _denoiser;
-        if (_channel == null) {
-          _pendingMicChunks--;
-          return;
-        }
-        if (skipDenoise || denoiser == null) {
-          clean = chunk;
-          voiceProbability = _peakAmplitude(chunk) > _speechAmplitudeThreshold ? 1.0 : 0.0;
-        } else {
-          try {
-            final result = await denoiser.process(chunk);
-            clean = result.audio;
-            voiceProbability = result.voiceProbability;
-          } catch (_) {
-            // Denoiser hiccup — fall back to the raw chunk rather than
-            // dropping audio and breaking the call.
-            clean = chunk;
-            voiceProbability = _peakAmplitude(chunk) > _speechAmplitudeThreshold ? 1.0 : 0.0;
-          }
-        }
-        _pendingMicChunks--;
-
-        // Real speech probability instead of a raw amplitude peak — a
-        // loud non-voice noise (door slam, horn) no longer triggers a
-        // false barge-in. On top of that, require several consecutive
-        // loud chunks in a row — a single spike (typically the AI's own
-        // echo bouncing back on loudspeaker) resets the streak instead of
-        // firing immediately, so only sustained real speech interrupts.
-        if (_aiIsSpeaking && voiceProbability > _voiceProbabilityThreshold) {
-          _consecutiveLoudChunks++;
-          if (_consecutiveLoudChunks >= _bargeInConsecutiveChunks) {
-            _consecutiveLoudChunks = 0;
-            _handleBargeIn();
-          }
-        } else {
-          _consecutiveLoudChunks = 0;
-        }
-
-        _send({
-          'realtimeInput': {
-            'audio': {'mimeType': 'audio/pcm;rate=$_sampleRateIn', 'data': base64Encode(clean)},
-          },
-        });
+      _send({
+        'realtimeInput': {
+          'audio': {'mimeType': 'audio/pcm;rate=$_sampleRateIn', 'data': base64Encode(chunk)},
+        },
       });
     });
   }
@@ -594,7 +498,6 @@ Rules:
     if (!_aiIsSpeaking) return;
     HapticFeedback.selectionClick();
     _aiIsSpeaking = false;
-    _consecutiveLoudChunks = 0;
     _jitterBuffer.clear();
     _bufferingTurn = true;
     _turnGapsMs.clear();
@@ -645,7 +548,7 @@ Rules:
     final avgGap = _turnGapsMs.reduce((a, b) => a + b) / _turnGapsMs.length;
     final maxGap = _turnGapsMs.reduce((a, b) => a > b ? a : b);
     if (avgGap > 120 || maxGap > 400) {
-      _cushionSeconds = (_cushionSeconds + 0.1).clamp(_minCushionSeconds, _maxCushionSeconds);
+      _cushionSeconds = (_cushionSeconds + 0.15).clamp(_minCushionSeconds, _maxCushionSeconds);
     } else if (avgGap < 50 && maxGap < 150) {
       _cushionSeconds = (_cushionSeconds - 0.05).clamp(_minCushionSeconds, _maxCushionSeconds);
     }
