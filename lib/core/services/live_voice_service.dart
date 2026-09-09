@@ -756,6 +756,13 @@ Rules:
       // Best-effort — don't block call teardown on this.
     }
     _audioSession = null;
+    if (Platform.isAndroid) {
+      try {
+        await _audioModeChannel.invokeMethod('stopAudioMode');
+      } catch (_) {
+        // Best-effort — don't block call teardown on this.
+      }
+    }
     await _wsSub?.cancel();
     _wsSub = null;
     await _channel?.sink.close();
