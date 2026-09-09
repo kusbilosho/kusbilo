@@ -19,8 +19,7 @@ class MainActivity : FlutterActivity() {
     // isBluetoothScoOn ko true nahi karte, warna agar headset available
     // hi nahi hai (ya connect hone mein time lag raha hai) to audio ek
     // "phantom" Bluetooth path pe chala jaata hai jo kahin nahi jaata —
-    // na earpiece, na speaker, na Bluetooth — aur call bilkul silent ho
-    // jaati hai.
+    // na loudspeaker, na Bluetooth — aur call bilkul silent ho jaati hai.
     private var scoReceiver: BroadcastReceiver? = null
     private var scoReceiverRegistered = false
 
@@ -34,19 +33,19 @@ class MainActivity : FlutterActivity() {
                 // mic apni hi speaker ki awaaz sun leta hai aur app galti se
                 // samajh leta hai buyer bol raha hai, AI ko beech me kaat deta hai.
                 audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-                // Asli call jaisa: default earpiece (speaker OFF) jab tak
-                // Bluetooth actually connect na ho jaaye (neeche receiver
-                // dekho). Speakerphone par mic-se-speaker ka echo path lamba
-                // ho jaata hai, jisse built-in AEC ko cancel karna zyada
-                // mushkil hota hai.
-                audioManager.isSpeakerphoneOn = false
+                // Ye ek asli phone call NAHI hai — user phone ko kaan se
+                // laga ke nahi rakhta, hands-free use karta hai. Isiliye
+                // default LOUDSPEAKER hona chahiye, earpiece nahi — warna
+                // user ko kuch sunayi hi nahi dega jab tak Bluetooth
+                // connected na ho.
+                audioManager.isSpeakerphoneOn = true
                 audioManager.isBluetoothScoOn = false
 
                 registerScoReceiver(audioManager)
                 // Sirf request karta hai — connection turant nahi banta.
                 // Agar koi Bluetooth headset connected/available nahi hai to
-                // ye silently kuch nahi karega aur normal earpiece/speaker
-                // path hi chalta rahega.
+                // ye silently kuch nahi karega aur loudspeaker path hi
+                // chalta rahega.
                 audioManager.startBluetoothSco()
                 result.success(null)
             } else if (call.method == "stopAudioMode") {
@@ -73,12 +72,14 @@ class MainActivity : FlutterActivity() {
                 if (state == AudioManager.SCO_AUDIO_STATE_CONNECTED) {
                     // Ab hi Bluetooth headset ka mic/speaker actually ready
                     // hai — tabhi audio ko us path pe bhejna safe hai.
+                    audioManager.isSpeakerphoneOn = false
                     audioManager.isBluetoothScoOn = true
                 } else if (state == AudioManager.SCO_AUDIO_STATE_DISCONNECTED) {
                     // Headset disconnect ho gaya (ya connect hi nahi hua) —
-                    // wapas normal earpiece/speaker path pe fall back karo,
-                    // taaki audio kabhi bhi silent na ho.
+                    // wapas loudspeaker pe fall back karo, taaki audio
+                    // kabhi bhi silent ya sirf earpiece pe na ho.
                     audioManager.isBluetoothScoOn = false
+                    audioManager.isSpeakerphoneOn = true
                 }
             }
         }
