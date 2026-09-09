@@ -26,6 +26,22 @@ class MainActivity : FlutterActivity() {
                 // sunayi deta tha. Earpiece default rakhne se AEC bahut behtar
                 // kaam karta hai, bilkul real phone call jaisa.
                 audioManager.isSpeakerphoneOn = false
+                // MODE_IN_COMMUNICATION akela kaafi nahi hai Bluetooth ke liye —
+                // jab tak hum explicitly SCO (Synchronous Connection-Oriented)
+                // link start nahi karte, Android audio ko hamesha phone ke
+                // earpiece pe hi route karega, chahe headset connected ho ya
+                // na ho. Isi wajah se pehle Bluetooth connected hone par bhi
+                // awaaz sirf earpiece se aa rahi thi. Ye do lines Bluetooth
+                // headset ke mic+speaker ko actually activate karti hain.
+                audioManager.isBluetoothScoOn = true
+                audioManager.startBluetoothSco()
+                result.success(null)
+            } else if (call.method == "stopAudioMode") {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager.stopBluetoothSco()
+                audioManager.isBluetoothScoOn = false
+                audioManager.mode = AudioManager.MODE_NORMAL
+                audioManager.isSpeakerphoneOn = false
                 result.success(null)
             } else {
                 result.notImplemented()
@@ -35,6 +51,8 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.stopBluetoothSco()
+        audioManager.isBluetoothScoOn = false
         audioManager.mode = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = false
         super.onDestroy()
