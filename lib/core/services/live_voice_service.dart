@@ -114,6 +114,13 @@ class LiveVoiceService {
   // sent to Gemini, so the AI only ever hears clean speech.
   NoiselessSession? _denoiser;
   Future<void> _micChain = Future.value();
+  // How many mic chunks are currently queued waiting on the denoiser (sent
+  // but not yet processed). If this grows, the denoiser is running slower
+  // than real time on this device — every chunk after it inherits the same
+  // growing delay, which is what breaks Gemini's turn-taking on-device
+  // ("bolta bhatak ke" / goes silent), not the actual background noise.
+  int _pendingMicChunks = 0;
+  static const int _maxPendingMicChunks = 3;
 
   static const double _minCushionSeconds = 0.25;
   static const double _maxCushionSeconds = 1.0;
@@ -468,6 +475,7 @@ Rules:
     _denoiser?.dispose();
     _denoiser = null;
     _micChain = Future.value();
+    _pendingMicChunks = 0;
   }
 
   void _scheduleSessionRefresh() {
@@ -509,24 +517,43 @@ Rules:
     _micSub = stream.listen((chunk) {
       if (_channel == null || _isMuted) return;
 
+      // If chunks are already piling up waiting on the denoiser, this
+      // device can't keep up with it in real time. Skip denoising THIS
+      // chunk and send it raw — that keeps the chain's per-chunk work
+      // near-zero so it drains the backlog instead of growing it further.
+      // Sending stale-but-clean audio late is worse than sending fresh-but-
+      // noisy audio on time: a growing delay is what confuses Gemini's
+      // turn-taking (that's the actual cause of "bolta bhatak ke" / goes
+      // silent), not a few unfiltered chunks.
+      final skipDenoise = _pendingMicChunks >= _maxPendingMicChunks;
+      _pendingMicChunks++;
+
       // Chain each chunk's denoise+send so chunks always leave in the
       // order they arrived, even though denoising is async.
       _micChain = _micChain.then((_) async {
-        final denoiser = _denoiser;
-        if (denoiser == null || _channel == null) return;
-
         Uint8List clean;
         double voiceProbability;
-        try {
-          final result = await denoiser.process(chunk);
-          clean = result.audio;
-          voiceProbability = result.voiceProbability;
-        } catch (_) {
-          // Denoiser hiccup — fall back to the raw chunk rather than
-          // dropping audio and breaking the call.
+        final denoiser = _denoiser;
+        if (_channel == null) {
+          _pendingMicChunks--;
+          return;
+        }
+        if (skipDenoise || denoiser == null) {
           clean = chunk;
           voiceProbability = _peakAmplitude(chunk) > _speechAmplitudeThreshold ? 1.0 : 0.0;
+        } else {
+          try {
+            final result = await denoiser.process(chunk);
+            clean = result.audio;
+            voiceProbability = result.voiceProbability;
+          } catch (_) {
+            // Denoiser hiccup — fall back to the raw chunk rather than
+            // dropping audio and breaking the call.
+            clean = chunk;
+            voiceProbability = _peakAmplitude(chunk) > _speechAmplitudeThreshold ? 1.0 : 0.0;
+          }
         }
+        _pendingMicChunks--;
 
         // Real speech probability instead of a raw amplitude peak — a
         // loud non-voice noise (door slam, horn) no longer triggers a
